@@ -104,6 +104,8 @@ fn set_dir(path: &Path, mode: u32) -> Result<()> {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(path, fs::Permissions::from_mode(mode))?;
     }
+    #[cfg(not(unix))]
+    let _ = mode;
     Ok(())
 }
 
@@ -113,5 +115,7 @@ pub fn set_private_file(path: &Path) -> Result<()> {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
     }
+    #[cfg(not(unix))]
+    let _ = path;
     Ok(())
 }

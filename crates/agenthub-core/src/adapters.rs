@@ -32,7 +32,7 @@ impl DomainProjection {
         }
         let mut h = Sha256::new();
         for (p, b) in &self.files {
-            h.update(p.to_string_lossy().as_bytes());
+            update_path_digest(&mut h, p);
             h.update(b);
         }
         hex::encode(h.finalize())
@@ -363,10 +363,19 @@ pub fn actual_domain_digest(domain: &DomainProjection) -> Result<String> {
     let files = tree_files_filtered(&domain.target_path, &domain.preserve_names)?;
     let mut h = Sha256::new();
     for (p, b) in files {
-        h.update(p.to_string_lossy().as_bytes());
+        update_path_digest(&mut h, &p);
         h.update(b);
     }
     Ok(hex::encode(h.finalize()))
+}
+
+fn update_path_digest(digest: &mut Sha256, path: &Path) {
+    for (index, component) in path.components().enumerate() {
+        if index > 0 {
+            digest.update(b"/");
+        }
+        digest.update(component.as_os_str().to_string_lossy().as_bytes());
+    }
 }
 pub fn actual_files(domain: &DomainProjection) -> Result<BTreeMap<PathBuf, Vec<u8>>> {
     if domain.target_path.is_file() {
