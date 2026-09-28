@@ -1,0 +1,16 @@
+[package]
+name = "agenthub-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "agenthub"
+path = "src/main.rs"
+
+[dependencies]
+agenthub-core.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+

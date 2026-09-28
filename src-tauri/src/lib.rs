@@ -1,0 +1,273 @@
+use agenthub_core::{
+    canonical, git,
+    models::{
+        Capability, CapabilityDetail, CapabilityKind, Dashboard, GitIdentity, Plan, RuleDocument,
+        ScanItem, Target, Transaction,
+    },
+    planner, scanner, transaction, AgentHub,
+};
+use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static INITIALIZING: AtomicBool = AtomicBool::new(false);
+struct InitGuard;
+impl InitGuard {
+    fn acquire() -> Result<Self, String> {
+        INITIALIZING
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| "initialization is already running".to_string())?;
+        Ok(Self)
+    }
+}
+impl Drop for InitGuard {
+    fn drop(&mut self) {
+        INITIALIZING.store(false, Ordering::Release);
+    }
+}
+
+fn hub() -> Result<AgentHub, String> {
+    AgentHub::open_default().map_err(err)
+}
+fn err(e: impl std::fmt::Display) -> String {
+    agenthub_core::secrets::redact(&e.to_string())
+}
+
+fn trace(area: &str, event: &str, context: impl std::fmt::Display) {
+    let context = agenthub_core::secrets::redact(&context.to_string().replace(['\n', '\r'], " "));
+    let context: String = context.chars().take(180).collect();
+    eprintln!("[agenthub][{area}] {event} {context}");
+}
+
+#[tauri::command]
+fn debug_event(event: String, context: Option<String>) -> Result<(), String> {
+    if event.is_empty()
+        || event.len() > 64
+        || !event
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+    {
+        return Err("invalid debug event".into());
+    }
+    trace("ui", &event, context.unwrap_or_default());
+    Ok(())
+}
+
+#[tauri::command]
+fn dashboard() -> Result<Dashboard, String> {
+    let h = hub()?;
+    let initialized = h.store.initialized().map_err(err)?;
+    let mut counts = BTreeMap::new();
+    if initialized {
+        for c in canonical::inventory(&h.paths).map_err(err)? {
+            *counts.entry(c.kind.as_str().to_string()).or_insert(0) += 1;
+        }
+    }
+    Ok(Dashboard {
+        initialized,
+        inventory: counts,
+        enabled_targets: h.store.enabled_targets().map_err(err)?,
+        dirty: git::snapshot(&h.paths.root).map_err(err)?.dirty,
+        recent_transactions: h.store.recent_transactions(5).map_err(err)?,
+    })
+}
+#[tauri::command]
+fn inventory() -> Result<Vec<agenthub_core::models::Capability>, String> {
+    let h = hub()?;
+    canonical::inventory(&h.paths).map_err(err)
+}
+#[tauri::command]
+fn capability_detail(kind: CapabilityKind, id: String) -> Result<CapabilityDetail, String> {
+    let h = hub()?;
+    canonical::read_capability_detail(&h.paths, kind, &id).map_err(err)
+}
+#[tauri::command]
+fn read_rule(id: String) -> Result<RuleDocument, String> {
+    let h = hub()?;
+    if !h.store.initialized().map_err(err)? {
+        return Err("AgentHub must be initialized before editing rules".into());
+    }
+    canonical::read_rule(&h.paths, &id).map_err(err)
+}
+#[tauri::command]
+fn save_rule(rule: RuleDocument, create: bool) -> Result<Capability, String> {
+    trace(
+        "rules",
+        "save_start",
+        format_args!("id={} create={create}", rule.id),
+    );
+    let h = hub()?;
+    if !h.store.initialized().map_err(err)? {
+        return Err("AgentHub must be initialized before adding rules".into());
+    }
+    let result = canonical::save_rule(&h.paths, &rule, create).map_err(err);
+    trace(
+        "rules",
+        if result.is_ok() {
+            "save_ok"
+        } else {
+            "save_failed"
+        },
+        format_args!("id={}", rule.id),
+    );
+    result
+}
+#[tauri::command]
+fn initial_scan() -> Result<Vec<ScanItem>, String> {
+    let h = hub()?;
+    if !h.store.initialized().map_err(err)?
+        && !canonical::canonical_dirs_empty(&h.paths).map_err(err)?
+    {
+        return Err("incomplete Canonical import exists; discard it before retrying".into());
+    }
+    scanner::scan_global(&h.paths, &Target::ALL).map_err(err)
+}
+#[tauri::command]
+fn finish_init(selected_ids: Vec<String>) -> Result<Vec<String>, String> {
+    let _guard = InitGuard::acquire()?;
+    let h = hub()?;
+    if h.store.initialized().map_err(err)? {
+        return Err("AgentHub is already initialized".into());
+    }
+    let selected: std::collections::BTreeSet<_> = selected_ids.into_iter().collect();
+    let mut items = scanner::scan_global(&h.paths, &Target::ALL).map_err(err)?;
+    for item in &mut items {
+        item.selected = selected.contains(&item.id);
+    }
+    let matched = items.iter().filter(|item| item.selected).count();
+    if matched != selected.len() {
+        return Err("scan result changed; scan again before importing".into());
+    }
+    let ids = canonical::import_initial_atomic(&h.paths, &items).map_err(err)?;
+    h.store.set_initialized(true).map_err(err)?;
+    git::ensure_repo(&h.paths.root).map_err(err)?;
+    Ok(ids)
+}
+#[tauri::command]
+fn discard_incomplete_init() -> Result<(), String> {
+    let _guard = InitGuard::acquire()?;
+    let h = hub()?;
+    if h.store.initialized().map_err(err)? {
+        return Err("cannot discard a completed initialization".into());
+    }
+    canonical::discard_incomplete_import(&h.paths).map_err(err)
+}
+#[tauri::command]
+fn set_target(target: Target, enabled: bool) -> Result<(), String> {
+    let h = hub()?;
+    h.store.set_target(target, enabled).map_err(err)
+}
+#[tauri::command]
+fn create_plan(target: Target) -> Result<Plan, String> {
+    trace("plan", "create_start", target.as_str());
+    let h = hub()?;
+    let p = planner::create(&h.paths, target).map_err(err)?;
+    h.store.save_plan(&p).map_err(err)?;
+    trace(
+        "plan",
+        "create_ok",
+        format_args!(
+            "target={} id={} steps={}",
+            target.as_str(),
+            p.id,
+            p.steps.len()
+        ),
+    );
+    Ok(p)
+}
+#[tauri::command]
+fn apply_plan(plan_id: String) -> Result<Transaction, String> {
+    trace("apply", "start", format_args!("plan_id={plan_id}"));
+    let h = hub()?;
+    let p = h
+        .store
+        .plan(&plan_id)
+        .map_err(err)?
+        .ok_or_else(|| "plan not found".to_string())?;
+    let result = transaction::apply(&h.paths, &h.store, &p).map_err(err);
+    trace(
+        "apply",
+        if result.is_ok() { "ok" } else { "failed" },
+        format_args!("plan_id={plan_id} target={}", p.target.as_str()),
+    );
+    result
+}
+#[tauri::command]
+fn transaction_history(limit: Option<usize>) -> Result<Vec<Transaction>, String> {
+    let h = hub()?;
+    h.store
+        .recent_transactions(limit.unwrap_or(100).clamp(1, 500))
+        .map_err(err)
+}
+#[tauri::command]
+fn rollback_transaction(transaction_id: String) -> Result<Transaction, String> {
+    trace(
+        "rollback",
+        "start",
+        format_args!("transaction_id={transaction_id}"),
+    );
+    let h = hub()?;
+    let result = transaction::rollback(&h.paths, &h.store, &transaction_id).map_err(err);
+    trace(
+        "rollback",
+        if result.is_ok() { "ok" } else { "failed" },
+        format_args!("transaction_id={transaction_id}"),
+    );
+    result
+}
+#[tauri::command]
+fn git_status() -> Result<String, String> {
+    let h = hub()?;
+    git::status(&h.paths.root).map_err(err)
+}
+#[tauri::command]
+fn git_diff() -> Result<String, String> {
+    let h = hub()?;
+    git::diff(&h.paths.root).map_err(err)
+}
+#[tauri::command]
+fn git_identity() -> Result<GitIdentity, String> {
+    let h = hub()?;
+    git::identity(&h.paths.root).map_err(err)
+}
+#[tauri::command]
+fn git_log() -> Result<String, String> {
+    let h = hub()?;
+    git::log(&h.paths.root).map_err(err)
+}
+#[tauri::command]
+fn git_commit(
+    message: String,
+    name: Option<String>,
+    email: Option<String>,
+) -> Result<String, String> {
+    let h = hub()?;
+    git::commit(&h.paths.root, &message, name.as_deref(), email.as_deref()).map_err(err)
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .invoke_handler(tauri::generate_handler![
+            dashboard,
+            debug_event,
+            inventory,
+            capability_detail,
+            read_rule,
+            save_rule,
+            initial_scan,
+            finish_init,
+            discard_incomplete_init,
+            set_target,
+            create_plan,
+            apply_plan,
+            transaction_history,
+            rollback_transaction,
+            git_status,
+            git_diff,
+            git_identity,
+            git_log,
+            git_commit
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running AgentHub")
+}

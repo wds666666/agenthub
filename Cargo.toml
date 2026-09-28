@@ -1,0 +1,30 @@
+[workspace]
+members = ["crates/agenthub-core", "crates/agenthub-cli", "src-tauri"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+
+[workspace.dependencies]
+agenthub-core = { path = "crates/agenthub-core" }
+anyhow = "1.0"
+base64 = "0.22"
+chacha20poly1305 = "0.10"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4.5", features = ["derive"] }
+dirs = "6.0"
+hex = "0.4"
+rand = "0.8"
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+tempfile = "3.13"
+thiserror = "2.0"
+toml = "0.8"
+toml_edit = "0.22"
+uuid = { version = "1.11", features = ["v4", "serde"] }
+walkdir = "2.5"
+

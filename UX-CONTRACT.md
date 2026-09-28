@@ -1,0 +1,17 @@
+# AgentHub UX contract
+
+- Chinese is the default locale. Every visible string is resolved from an i18n key; English has the same key structure.
+- Initialization follows scan → select imports → review Canonical → finish. Nothing is written to a host during initialization.
+- Inventory edits validate before save, remain in the Git working tree and show a persistent “待提交” state.
+- Every inventory row is keyboard- and pointer-accessible and opens a read-only Canonical detail. Skills preview `SKILL.md`; MCP previews `server.json`; Rules preview their Markdown and retain a separate edit action; Plugins preview the AgentHub manifest plus a safe file inventory rather than executing or rendering payloads. Detail read failures preserve the inventory and expose retryable inline feedback.
+- Post-initialization capability import is user-initiated and never scans automatically. In v0.1 the desktop import/editor first supports Rules: choosing a Markdown file initializes a reviewable draft, and no Canonical file is written until the user explicitly saves it.
+- Rule create and edit use the same maintained form. “Rule ID” means the stable unique lowercase slug used for the Canonical directory, adapter references, and history identity; the UI explains this with an example. Save validates the lowercase slug ID, non-empty body, activation metadata, paths, and at least one compatible target; failures preserve the complete draft. Editing keeps the existing ID immutable in v0.1.
+- Search is local, IME-safe, debounced when work is non-trivial, and has an owned clear control.
+- Sync follows target → generate Plan → review capability-level impact, file changes/deletions, and warnings → explicit confirmation → Apply → verify. Plan generation has no host side effects. The primary summary groups affected Skills, MCP servers, Plugins, and Rules and separates create, update/replace, delete, and skipped counts; raw file count and paths remain available as implementation detail.
+- Compatibility loss or plaintext secret materialization requires a separate acknowledgement from the ordinary Apply confirmation.
+- Loading preserves layout. Empty, error, stale and partial states retain the last trustworthy data and expose retry where safe.
+- Failures preserve user input. Successful mutations show an app-owned toast and move focus to a useful status heading.
+- Git commit requires a user message and is available from the Git history page. When Git identity is missing, the same form requests name and email and writes them only to the AgentHub repository-local configuration. Restore is blocked when the tree is dirty by default and writes historical content as new working-tree changes, never `reset --hard`.
+- Rollback shows exactly which transaction and target will be restored and explicitly states that it restores the host state captured immediately before that Apply. It does not modify Canonical. A manual rollback first backs up the current writable domains, verifies the restored backup, records a new rollback transaction, and leaves detectable drift for a later Plan. Backup cleanup states that future rollback will become impossible.
+- Dialogs trap focus, close on Escape unless an operation is irreversible/in progress, and restore focus to the trigger. No browser alert, confirm or prompt is permitted.
+- Destructive action labels name the consequence, such as “覆盖 Cursor” or “删除备份”, not generic “确定”.
