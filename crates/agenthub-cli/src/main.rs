@@ -49,6 +49,10 @@ enum Command {
         #[arg(long)]
         confirm: bool,
     },
+    AutoSync {
+        #[command(subcommand)]
+        command: AutoSyncCommand,
+    },
     Rollback {
         transaction_id: String,
     },
@@ -73,6 +77,11 @@ enum Command {
 enum TargetCommand {
     Enable { target: TargetArg },
     Disable { target: TargetArg },
+}
+#[derive(Subcommand)]
+enum AutoSyncCommand {
+    Status,
+    Run,
 }
 #[derive(Subcommand)]
 enum GitCommand {
@@ -185,6 +194,13 @@ fn main() -> Result<()> {
             let tx = transaction::apply(&hub.paths, &hub.store, &p)?;
             println!("{}", serde_json::to_string_pretty(&tx)?);
         }
+        Command::AutoSync { command } => match command {
+            AutoSyncCommand::Status => println!(
+                "{}",
+                serde_json::to_string_pretty(&hub.store.auto_sync_profiles()?)?
+            ),
+            AutoSyncCommand::Run => print_auto_sync(&hub)?,
+        },
         Command::Rollback { transaction_id } => println!(
             "{}",
             serde_json::to_string_pretty(&transaction::rollback(
@@ -210,7 +226,8 @@ fn main() -> Result<()> {
             ),
             GitCommand::Log => println!("{}", git::log(&hub.paths.root)?),
             GitCommand::Restore { commit, capability } => {
-                git::restore(&hub.paths.root, &commit, capability.as_deref())?
+                git::restore(&hub.paths.root, &commit, capability.as_deref())?;
+                print_auto_sync(&hub)?
             }
         },
         Command::Secret { command } => match command {
@@ -225,7 +242,7 @@ fn main() -> Result<()> {
             }
         },
         Command::Doctor { json } => {
-            let report = serde_json::json!({"initialized":hub.store.initialized()?,"root":hub.paths.root,"git":git::snapshot(&hub.paths.root)?,"masterKey":hub.paths.master_key.exists(),"targets":hub.store.enabled_targets()?});
+            let report = serde_json::json!({"initialized":hub.store.initialized()?,"root":hub.paths.root,"git":git::snapshot(&hub.paths.root)?,"masterKey":hub.paths.master_key.exists(),"targets":hub.store.enabled_targets()?,"autoSync":hub.store.auto_sync_profiles()?});
             if json {
                 println!("{}", serde_json::to_string_pretty(&report)?)
             } else {
@@ -244,4 +261,14 @@ fn parse_targets(value: &str) -> Result<Vec<Target>> {
     } else {
         Ok(vec![value.parse()?])
     }
+}
+
+fn print_auto_sync(hub: &AgentHub) -> Result<()> {
+    let outcomes = transaction::run_auto_sync(&hub.paths, &hub.store)?;
+    println!("{}", serde_json::to_string_pretty(&outcomes)?);
+    anyhow::ensure!(
+        outcomes.iter().all(|outcome| outcome.error.is_none()),
+        "one or more automatic sync targets failed"
+    );
+    Ok(())
 }

@@ -11,7 +11,11 @@ cargo run -p agenthub-cli -- doctor
 pnpm tauri dev
 ```
 
-The runtime root defaults to `~/.agenthub`. For tests and isolated trials, set `HOME` to a temporary directory and optionally set `AGENTHUB_HOME` explicitly. Do not run synchronization against a real user home until the generated Plan has been reviewed.
+The runtime root defaults to `~/.agenthub`. For tests and isolated trials, set `HOME` to a temporary directory and optionally set `AGENTHUB_HOME` explicitly. Review a Plan before the first manual sync, or explicitly enable an automatic-sync profile after checking its target and selected capability scope. Automatic sync is triggered only by Canonical mutations performed through AgentHub; it is not a background filesystem watcher.
 
 See `docs/architecture.md` and `docs/sync-contract.md` before changing storage or adapter behavior.
 Ubuntu/WSL setup and the complete verification commands are documented in `docs/development.md`.
+
+## External agent skill
+
+The reusable external-agent integration is in [`skills/agenthub-manager`](skills/agenthub-manager/SKILL.md). It teaches an agent how to inspect AgentHub, review scoped Plans, request confirmation before sync/rollback, and preserve the Canonical/Git/SQLite/backups boundaries.

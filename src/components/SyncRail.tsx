@@ -1,4 +1,4 @@
-import { Box, Braces, Check, Circle, Code2, FileText, PlugZap, Sparkles } from "lucide-react";
+import { Box, Braces, Check, Circle, Code2, FileText, PlugZap, Radio, Sparkles } from "lucide-react";
 import type { CSSProperties } from "react";
 import type { Dashboard, Kind, Target } from "../lib/api";
 import { t } from "../lib/i18n";
@@ -27,7 +27,7 @@ export function SyncRail({ dashboard }: { dashboard: Dashboard }) {
           <p className="eyebrow">CANONICAL FLOW</p>
           <h2>{t("overview.flowTitle")}</h2>
         </div>
-        <span className="flow-card__summary">{dashboard.enabled_targets.length} / 3 {t("overview.channels")}</span>
+        <span className="flow-card__summary"><Radio size={13} /> {dashboard.auto_sync_targets.length} {t("overview.autoChannels")} · {dashboard.enabled_targets.length} / 3 {t("overview.channels")}</span>
       </header>
 
       <div className="flow-topology">
@@ -55,14 +55,15 @@ export function SyncRail({ dashboard }: { dashboard: Dashboard }) {
         <div className="target-stack">
           {targets.map(({ id, mark }) => {
             const active = dashboard.enabled_targets.includes(id);
+            const automatic = dashboard.auto_sync_targets.includes(id);
             return (
               <div className={`target-node ${active ? "is-active" : ""}`} key={id}>
                 <span className="target-node__mark">{mark}</span>
                 <span className="target-node__copy">
                   <strong>{t(`targets.${id}`)}</strong>
-                  <small>{active ? t("overview.ready") : t("overview.notEnabled")}</small>
+                  <small>{automatic ? t("overview.autoReady") : active ? t("overview.ready") : t("overview.notEnabled")}</small>
                 </span>
-                {active ? <Check size={17} /> : <Circle size={15} />}
+                {automatic ? <Radio size={17} /> : active ? <Check size={17} /> : <Circle size={15} />}
               </div>
             );
           })}

@@ -1,8 +1,9 @@
 use agenthub_core::{
     canonical, git,
     models::{
-        Capability, CapabilityDetail, CapabilityKind, Dashboard, GitIdentity, Plan, RuleDocument,
-        ScanItem, Target, Transaction,
+        AutoSyncProfile, AutoSyncUpdateResult, CapabilityDetail, CapabilityKind,
+        CapabilityMutationResult, Dashboard, GitIdentity, Plan, RuleDocument, ScanItem,
+        SyncSelection, Target, Transaction,
     },
     planner, scanner, transaction, AgentHub,
 };
@@ -62,10 +63,19 @@ fn dashboard() -> Result<Dashboard, String> {
             *counts.entry(c.kind.as_str().to_string()).or_insert(0) += 1;
         }
     }
+    let auto_sync_targets = h
+        .store
+        .auto_sync_profiles()
+        .map_err(err)?
+        .into_iter()
+        .filter(|profile| profile.enabled)
+        .map(|profile| profile.target)
+        .collect();
     Ok(Dashboard {
         initialized,
         inventory: counts,
         enabled_targets: h.store.enabled_targets().map_err(err)?,
+        auto_sync_targets,
         dirty: git::snapshot(&h.paths.root).map_err(err)?.dirty,
         recent_transactions: h.store.recent_transactions(5).map_err(err)?,
     })
@@ -89,7 +99,7 @@ fn read_rule(id: String) -> Result<RuleDocument, String> {
     canonical::read_rule(&h.paths, &id).map_err(err)
 }
 #[tauri::command]
-fn save_rule(rule: RuleDocument, create: bool) -> Result<Capability, String> {
+fn save_rule(rule: RuleDocument, create: bool) -> Result<CapabilityMutationResult, String> {
     trace(
         "rules",
         "save_start",
@@ -109,7 +119,25 @@ fn save_rule(rule: RuleDocument, create: bool) -> Result<Capability, String> {
         },
         format_args!("id={}", rule.id),
     );
-    result
+    let capability = result?;
+    let auto_sync = transaction::run_auto_sync(&h.paths, &h.store).map_err(err)?;
+    trace(
+        "rules",
+        "auto_sync_complete",
+        format_args!(
+            "id={} targets={} failures={}",
+            rule.id,
+            auto_sync.len(),
+            auto_sync
+                .iter()
+                .filter(|outcome| outcome.error.is_some())
+                .count()
+        ),
+    );
+    Ok(CapabilityMutationResult {
+        capability,
+        auto_sync,
+    })
 }
 #[tauri::command]
 fn initial_scan() -> Result<Vec<ScanItem>, String> {
@@ -157,10 +185,10 @@ fn set_target(target: Target, enabled: bool) -> Result<(), String> {
     h.store.set_target(target, enabled).map_err(err)
 }
 #[tauri::command]
-fn create_plan(target: Target) -> Result<Plan, String> {
+fn create_plan(target: Target, selection: Option<SyncSelection>) -> Result<Plan, String> {
     trace("plan", "create_start", target.as_str());
     let h = hub()?;
-    let p = planner::create(&h.paths, target).map_err(err)?;
+    let p = planner::create_with_selection(&h.paths, target, selection.as_ref()).map_err(err)?;
     h.store.save_plan(&p).map_err(err)?;
     trace(
         "plan",
@@ -190,6 +218,65 @@ fn apply_plan(plan_id: String) -> Result<Transaction, String> {
         format_args!("plan_id={plan_id} target={}", p.target.as_str()),
     );
     result
+}
+#[tauri::command]
+fn auto_sync_profiles() -> Result<Vec<AutoSyncProfile>, String> {
+    let h = hub()?;
+    h.store.auto_sync_profiles().map_err(err)
+}
+#[tauri::command]
+fn set_auto_sync(
+    target: Target,
+    selection: SyncSelection,
+    enabled: bool,
+) -> Result<AutoSyncUpdateResult, String> {
+    trace(
+        "auto_sync",
+        "configure_start",
+        format_args!("target={} enabled={enabled}", target.as_str()),
+    );
+    let h = hub()?;
+    let profile = AutoSyncProfile {
+        target,
+        enabled,
+        selection,
+    };
+    if !enabled {
+        h.store.set_auto_sync_profile(&profile).map_err(err)?;
+        trace("auto_sync", "disabled", target.as_str());
+        return Ok(AutoSyncUpdateResult {
+            profile,
+            initial_sync: None,
+        });
+    }
+    let has_scope = !profile.selection.skills.is_empty()
+        || !profile.selection.plugins.is_empty()
+        || !profile.selection.mcp.is_empty()
+        || profile.selection.rules;
+    if !has_scope {
+        return Err("select at least one capability before enabling automatic sync".into());
+    }
+    let initial_sync = transaction::sync_once(&h.paths, &h.store, target, Some(&profile.selection))
+        .map_err(err)?;
+    h.store.set_auto_sync_profile(&profile).map_err(err)?;
+    trace(
+        "auto_sync",
+        "enabled",
+        format_args!(
+            "target={} changed={} transaction={}",
+            target.as_str(),
+            initial_sync.changed,
+            initial_sync
+                .transaction
+                .as_ref()
+                .map(|transaction| transaction.id.as_str())
+                .unwrap_or("none")
+        ),
+    );
+    Ok(AutoSyncUpdateResult {
+        profile,
+        initial_sync: Some(initial_sync),
+    })
 }
 #[tauri::command]
 fn transaction_history(limit: Option<usize>) -> Result<Vec<Transaction>, String> {
@@ -260,6 +347,8 @@ pub fn run() {
             set_target,
             create_plan,
             apply_plan,
+            auto_sync_profiles,
+            set_auto_sync,
             transaction_history,
             rollback_transaction,
             git_status,

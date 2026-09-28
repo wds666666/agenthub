@@ -1,6 +1,9 @@
 use agenthub_core::{
     canonical, git,
-    models::{CapabilityKind, GitSnapshot, McpServer, RuleDocument, ScanItem, Target, Transaction},
+    models::{
+        CapabilityKind, GitSnapshot, McpServer, RuleDocument, ScanItem, SyncSelection, Target,
+        Transaction, TransactionMode,
+    },
     paths::AgentHubPaths,
     planner, scanner, secrets, transaction, AgentHub,
 };
@@ -101,6 +104,7 @@ fn plan_is_read_only_and_apply_preserves_unrelated_mcp_settings() {
     hub.store.save_plan(&plan).unwrap();
     let tx = transaction::apply(&hub.paths, &hub.store, &plan).unwrap();
     assert_eq!(tx.status, "applied");
+    assert_eq!(tx.mode, TransactionMode::Reviewed);
     assert_eq!(hub.store.enabled_targets().unwrap(), vec![Target::Cursor]);
     assert!(!cursor.join("skills/host-only").exists());
     assert!(cursor.join("skills/review/SKILL.md").exists());
@@ -127,6 +131,7 @@ fn manual_rollback_restores_pre_apply_state_and_records_a_new_transaction() {
 
     let rollback = transaction::rollback(&hub.paths, &hub.store, &applied.id).unwrap();
     assert_eq!(rollback.status, "rollback_applied");
+    assert_eq!(rollback.mode, TransactionMode::Rollback);
     assert_eq!(rollback.target, Target::Cursor);
     assert_ne!(rollback.id, applied.id);
     assert!(!cursor.join("skills/review").exists());
@@ -135,6 +140,59 @@ fn manual_rollback_restores_pre_apply_state_and_records_a_new_transaction() {
         "before apply"
     );
     assert!(hub.store.transaction(&rollback.id).unwrap().is_some());
+}
+
+#[test]
+fn selected_sync_scope_only_projects_selected_domains_and_resources() {
+    let (_temp, hub) = fixture();
+    seed(&hub);
+    let cursor = hub.paths.user_home.join(".cursor");
+    fs::create_dir_all(cursor.join("skills/host-only")).unwrap();
+    fs::write(cursor.join("skills/host-only/SKILL.md"), "host drift").unwrap();
+    fs::write(
+        cursor.join("mcp.json"),
+        r#"{"theme":"night","mcpServers":{"old":{"command":"old"}}}"#,
+    )
+    .unwrap();
+    fs::create_dir_all(cursor.join("plugins/local/host-plugin")).unwrap();
+    fs::write(cursor.join("plugins/local/host-plugin/file.txt"), "keep").unwrap();
+    fs::create_dir_all(cursor.join("plugins/local/agenthub-rules/rules")).unwrap();
+    fs::write(
+        cursor.join("plugins/local/agenthub-rules/rules/keep.mdc"),
+        "keep rule",
+    )
+    .unwrap();
+
+    let selection = SyncSelection {
+        skills: vec!["review".into()],
+        plugins: Vec::new(),
+        mcp: Vec::new(),
+        rules: false,
+    };
+    let plan =
+        planner::create_with_selection(&hub.paths, Target::Cursor, Some(&selection)).unwrap();
+    assert!(plan.selection.as_ref().unwrap() == &selection);
+    assert!(plan
+        .steps
+        .iter()
+        .all(|step| step.capability_kind == Some(CapabilityKind::Skill)));
+    hub.store.save_plan(&plan).unwrap();
+    let transaction =
+        transaction::apply_with_mode(&hub.paths, &hub.store, &plan, TransactionMode::AutoSync)
+            .unwrap();
+    assert_eq!(transaction.mode, TransactionMode::AutoSync);
+    assert!(cursor.join("skills/review/SKILL.md").exists());
+    assert!(!cursor.join("skills/host-only").exists());
+    assert_eq!(
+        fs::read_to_string(cursor.join("plugins/local/host-plugin/file.txt")).unwrap(),
+        "keep"
+    );
+    assert!(fs::read_to_string(cursor.join("mcp.json"))
+        .unwrap()
+        .contains("old"));
+    assert!(cursor
+        .join("plugins/local/agenthub-rules/rules/keep.mdc")
+        .exists());
 }
 
 #[test]
@@ -271,6 +329,7 @@ fn legacy_applied_transaction_enables_missing_target_on_reopen() {
             plan_id: "legacy-plan".into(),
             target: Target::Claude,
             status: "applied".into(),
+            mode: Default::default(),
             backup_path: hub.paths.backups.join("legacy-transaction"),
             git: GitSnapshot {
                 head: None,
@@ -289,4 +348,58 @@ fn legacy_applied_transaction_enables_missing_target_on_reopen() {
         reopened.store.enabled_targets().unwrap(),
         vec![Target::Claude]
     );
+}
+
+#[test]
+fn automatic_sync_profiles_run_after_mutation_and_skip_noop_transactions() {
+    let (_temp, hub) = fixture();
+    seed(&hub);
+    let selection = SyncSelection {
+        skills: vec!["review".into()],
+        plugins: Vec::new(),
+        mcp: Vec::new(),
+        rules: false,
+    };
+
+    let first =
+        transaction::sync_once(&hub.paths, &hub.store, Target::Cursor, Some(&selection)).unwrap();
+    assert!(first.changed);
+    assert_eq!(
+        first.transaction.as_ref().unwrap().mode,
+        TransactionMode::AutoSync
+    );
+    hub.store
+        .set_auto_sync_profile(&agenthub_core::models::AutoSyncProfile {
+            target: Target::Cursor,
+            enabled: true,
+            selection,
+        })
+        .unwrap();
+    fs::write(
+        hub.paths.skills.join("review/SKILL.md"),
+        "---\nname: review\ndescription: Updated review\n---\n# Review",
+    )
+    .unwrap();
+    let changed = transaction::run_auto_sync(&hub.paths, &hub.store).unwrap();
+    assert_eq!(changed.len(), 1);
+    assert!(changed[0].changed);
+    assert!(changed[0].error.is_none());
+
+    let no_change = transaction::run_auto_sync(&hub.paths, &hub.store).unwrap();
+    assert_eq!(no_change.len(), 1);
+    assert!(!no_change[0].changed);
+    assert!(no_change[0].transaction_id.is_none());
+    assert_eq!(hub.store.recent_transactions(10).unwrap().len(), 2);
+}
+
+#[test]
+fn legacy_default_sync_mode_deserializes_as_automatic_sync() {
+    let json = r#"{
+        "id":"tx","plan_id":"plan","target":"codex","status":"applied",
+        "mode":"default_sync","backup_path":"/tmp/backup",
+        "git":{"head":null,"dirty":false},"canonical_digest":"digest",
+        "verification":"ok","created_at":"2026-09-28T00:00:00Z"
+    }"#;
+    let transaction: Transaction = serde_json::from_str(json).unwrap();
+    assert_eq!(transaction.mode, TransactionMode::AutoSync);
 }

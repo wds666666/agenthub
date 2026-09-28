@@ -28,7 +28,7 @@ Every JSON manifest contains `schemaVersion: 1`.
 - `McpServer`: `transport` (`stdio`, `http`, `sse`), command/args or URL, headers/env/OAuth, and `SecretRef` values.
 - `Rule`: Markdown body in `rule.md` plus `schemaVersion`, immutable lowercase slug `id`, `displayName`, `activation`, `paths`, and target compatibility in `rule.json`. Desktop Markdown import initializes this structure as a draft before the user saves it.
 - `Plugin`: `agenthub.plugin.json` describes skills, MCP, rules, agents, commands, hooks, LSP and assets stored below `payload/`.
-- `TargetProfile`: target enablement, compatibility and last synchronization summary.
+- `TargetProfile`: target enablement, compatibility, last synchronization summary, and an optional SQLite-only automatic-sync profile containing the explicitly selected Skills, Plugins, MCP IDs and Rules toggle. Automatic-sync configuration is business state and is not part of Canonical Git content.
 - `Plan`: deterministic difference from one Canonical snapshot to a target's entire writable capability domain.
 - `Transaction`: immutable record of the Plan, Git state, backup, execution, verification and rollback.
 

@@ -1,7 +1,9 @@
 use crate::{
-    adapters::{actual_domain_digest, projection, DomainProjection},
+    adapters::{actual_domain_digest, projection_with_selection, DomainProjection},
     canonical::canonical_digest,
-    models::{Plan, Transaction},
+    models::{
+        AutoSyncOutcome, Plan, SyncRunResult, SyncSelection, Target, Transaction, TransactionMode,
+    },
     paths::{set_private_file, AgentHubPaths},
     storage::Store,
 };
@@ -31,11 +33,68 @@ struct BackupManifest {
 }
 
 pub fn apply(paths: &AgentHubPaths, store: &Store, plan: &Plan) -> Result<Transaction> {
+    apply_with_mode(paths, store, plan, TransactionMode::Reviewed)
+}
+
+pub fn sync_once(
+    paths: &AgentHubPaths,
+    store: &Store,
+    target: Target,
+    selection: Option<&SyncSelection>,
+) -> Result<SyncRunResult> {
+    let plan = crate::planner::create_with_selection(paths, target, selection)?;
+    if plan.steps.is_empty() {
+        return Ok(SyncRunResult {
+            changed: false,
+            plan,
+            transaction: None,
+        });
+    }
+    store.save_plan(&plan)?;
+    let transaction = apply_with_mode(paths, store, &plan, TransactionMode::AutoSync)?;
+    Ok(SyncRunResult {
+        changed: true,
+        plan,
+        transaction: Some(transaction),
+    })
+}
+
+pub fn run_auto_sync(paths: &AgentHubPaths, store: &Store) -> Result<Vec<AutoSyncOutcome>> {
+    let profiles = store.auto_sync_profiles()?;
+    Ok(profiles
+        .into_iter()
+        .filter(|profile| profile.enabled)
+        .map(
+            |profile| match sync_once(paths, store, profile.target, Some(&profile.selection)) {
+                Ok(result) => AutoSyncOutcome {
+                    target: profile.target,
+                    changed: result.changed,
+                    transaction_id: result.transaction.map(|transaction| transaction.id),
+                    error: None,
+                },
+                Err(error) => AutoSyncOutcome {
+                    target: profile.target,
+                    changed: false,
+                    transaction_id: None,
+                    error: Some(crate::secrets::redact(&format!("{error:#}"))),
+                },
+            },
+        )
+        .collect())
+}
+
+pub fn apply_with_mode(
+    paths: &AgentHubPaths,
+    store: &Store,
+    plan: &Plan,
+    mode: TransactionMode,
+) -> Result<Transaction> {
     anyhow::ensure!(
         canonical_digest(paths)? == plan.canonical_digest,
         "canonical state changed; generate a new plan"
     );
-    let current = crate::planner::create(paths, plan.target)?;
+    let current =
+        crate::planner::create_with_selection(paths, plan.target, plan.selection.as_ref())?;
     anyhow::ensure!(
         current.steps == plan.steps,
         "target drift changed; generate a new plan"
@@ -43,13 +102,14 @@ pub fn apply(paths: &AgentHubPaths, store: &Store, plan: &Plan) -> Result<Transa
     let id = Uuid::new_v4().to_string();
     let backup_path = paths.backups.join(&id);
     fs::create_dir_all(&backup_path)?;
-    let domains = projection(paths, plan.target)?;
+    let domains = projection_with_selection(paths, plan.target, plan.selection.as_ref())?;
     let manifest = backup(&id, &backup_path, &domains)?;
     let mut tx = Transaction {
         id: id.clone(),
         plan_id: plan.id.clone(),
         target: plan.target,
         status: "applying".into(),
+        mode,
         backup_path: backup_path.clone(),
         git: plan.git.clone(),
         canonical_digest: plan.canonical_digest.clone(),
@@ -234,6 +294,7 @@ pub fn rollback(paths: &AgentHubPaths, store: &Store, transaction_id: &str) -> R
         plan_id: source.plan_id.clone(),
         target: source.target,
         status: "rolling_back".into(),
+        mode: TransactionMode::Rollback,
         backup_path: backup_path.clone(),
         git: crate::git::snapshot(&paths.root)?,
         canonical_digest: canonical_digest(paths).unwrap_or_else(|_| "unavailable".into()),

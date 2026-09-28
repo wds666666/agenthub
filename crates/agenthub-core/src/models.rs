@@ -140,6 +140,18 @@ pub struct PlanCapabilitySummary {
     pub skip: usize,
     pub files: usize,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct SyncSelection {
+    #[serde(default)]
+    pub skills: Vec<String>,
+    #[serde(default)]
+    pub plugins: Vec<String>,
+    #[serde(default)]
+    pub mcp: Vec<String>,
+    #[serde(default)]
+    pub rules: bool,
+}
 impl Default for PlanCapabilitySummary {
     fn default() -> Self {
         Self {
@@ -169,9 +181,21 @@ pub struct Plan {
     pub git: GitSnapshot,
     pub steps: Vec<PlanStep>,
     #[serde(default)]
+    pub selection: Option<SyncSelection>,
+    #[serde(default)]
     pub summary: Vec<PlanCapabilitySummary>,
     pub warnings: Vec<String>,
     pub created_at: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TransactionMode {
+    #[default]
+    Reviewed,
+    #[serde(rename = "auto_sync", alias = "default_sync")]
+    AutoSync,
+    Rollback,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -180,6 +204,8 @@ pub struct Transaction {
     pub plan_id: String,
     pub target: Target,
     pub status: String,
+    #[serde(default)]
+    pub mode: TransactionMode,
     pub backup_path: PathBuf,
     pub git: GitSnapshot,
     pub canonical_digest: String,
@@ -187,11 +213,47 @@ pub struct Transaction {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SyncRunResult {
+    pub changed: bool,
+    pub plan: Plan,
+    pub transaction: Option<Transaction>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AutoSyncProfile {
+    pub target: Target,
+    pub enabled: bool,
+    pub selection: SyncSelection,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AutoSyncOutcome {
+    pub target: Target,
+    pub changed: bool,
+    pub transaction_id: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AutoSyncUpdateResult {
+    pub profile: AutoSyncProfile,
+    pub initial_sync: Option<SyncRunResult>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CapabilityMutationResult {
+    pub capability: Capability,
+    pub auto_sync: Vec<AutoSyncOutcome>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Dashboard {
     pub initialized: bool,
     pub inventory: BTreeMap<String, usize>,
     pub enabled_targets: Vec<Target>,
+    #[serde(default)]
+    pub auto_sync_targets: Vec<Target>,
     pub dirty: bool,
     pub recent_transactions: Vec<Transaction>,
 }

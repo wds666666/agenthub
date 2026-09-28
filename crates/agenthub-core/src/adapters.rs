@@ -1,6 +1,6 @@
 use crate::{
     canonical::{inventory, sha256},
-    models::{CapabilityKind, McpServer, Target},
+    models::{CapabilityKind, McpServer, SyncSelection, Target},
     paths::AgentHubPaths,
 };
 use anyhow::{Context, Result};
@@ -40,12 +40,21 @@ impl DomainProjection {
 }
 
 pub fn projection(paths: &AgentHubPaths, target: Target) -> Result<Vec<DomainProjection>> {
+    projection_with_selection(paths, target, None)
+}
+
+pub fn projection_with_selection(
+    paths: &AgentHubPaths,
+    target: Target,
+    selection: Option<&SyncSelection>,
+) -> Result<Vec<DomainProjection>> {
     let caps = inventory(paths)?;
-    let skill_files = tree_files(&paths.skills)?;
-    let plugin_files = tree_files(&paths.plugins)?;
+    let skill_files = tree_files_selected(&paths.skills, selection.map(|value| &value.skills))?;
+    let plugin_files = tree_files_selected(&paths.plugins, selection.map(|value| &value.plugins))?;
     let rule_caps: Vec<_> = caps
         .iter()
         .filter(|c| c.kind == CapabilityKind::Rule)
+        .filter(|_| selection.is_none_or(|value| value.rules))
         .collect();
     let (skill_path, mcp_path, plugin_path, rule_projection) = match target {
         Target::Cursor => (
@@ -79,12 +88,12 @@ pub fn projection(paths: &AgentHubPaths, target: Target) -> Result<Vec<DomainPro
             target_plugins.insert(path, bytes);
         }
     }
-    if target == Target::Cursor {
+    if target == Target::Cursor && selection.is_none_or(|value| value.rules) {
         for (path, bytes) in &rule_projection.files {
             target_plugins.insert(PathBuf::from("agenthub-rules").join(path), bytes.clone());
         }
     }
-    let mcp = project_mcp(paths, target, &mcp_path)?;
+    let mcp = project_mcp(paths, target, &mcp_path, selection.map(|value| &value.mcp))?;
     let skill_preserve = if target == Target::Claude {
         vec![".synced".into(), "synced".into()]
     } else {
@@ -92,36 +101,45 @@ pub fn projection(paths: &AgentHubPaths, target: Target) -> Result<Vec<DomainPro
     };
     let plugin_preserve = if target == Target::Claude {
         vec!["managed".into(), "marketplaces".into()]
+    } else if target == Target::Cursor && selection.is_some_and(|value| !value.rules) {
+        vec!["agenthub-rules".into()]
     } else {
         Vec::new()
     };
-    let mut out = vec![
-        DomainProjection {
+    let mut out = Vec::new();
+    if selection.is_none_or(|value| !value.skills.is_empty()) {
+        out.push(DomainProjection {
             name: "skills",
             kind: CapabilityKind::Skill,
             target_path: skill_path,
             files: skill_files,
             preserve_names: skill_preserve,
             sensitive: false,
-        },
-        DomainProjection {
+        });
+    }
+    if selection.is_none_or(|value| !value.mcp.is_empty()) {
+        out.push(DomainProjection {
             name: "mcp",
             kind: CapabilityKind::Mcp,
             target_path: mcp_path,
             files: BTreeMap::from([(PathBuf::new(), mcp)]),
             preserve_names: Vec::new(),
             sensitive: true,
-        },
-        DomainProjection {
+        });
+    }
+    if selection
+        .is_none_or(|value| !value.plugins.is_empty() || (target == Target::Cursor && value.rules))
+    {
+        out.push(DomainProjection {
             name: "plugins",
             kind: CapabilityKind::Plugin,
             target_path: plugin_path,
             files: target_plugins,
             preserve_names: plugin_preserve,
             sensitive: false,
-        },
-    ];
-    if target != Target::Cursor {
+        });
+    }
+    if target != Target::Cursor && selection.is_none_or(|value| value.rules) {
         out.push(rule_projection);
     }
     Ok(out)
@@ -134,13 +152,28 @@ fn manifest_name(target: Target) -> PathBuf {
         Target::Claude => PathBuf::from(".claude-plugin/plugin.json"),
     }
 }
-fn tree_files(root: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>> {
+fn tree_files_selected(
+    root: &Path,
+    selected: Option<&Vec<String>>,
+) -> Result<BTreeMap<PathBuf, Vec<u8>>> {
     let mut out = BTreeMap::new();
     if !root.exists() {
         return Ok(out);
     }
     for e in WalkDir::new(root).follow_links(false) {
         let e = e?;
+        if let Some(selected) = selected {
+            let relative = e.path().strip_prefix(root)?;
+            if let Some(first) = relative.components().next() {
+                let id = first.as_os_str().to_string_lossy();
+                if !selected.iter().any(|value| value == id.as_ref()) {
+                    if e.file_type().is_dir() {
+                        continue;
+                    }
+                    continue;
+                }
+            }
+        }
         if e.file_type().is_symlink() {
             anyhow::bail!(
                 "symlink is not allowed in canonical projection: {}",
@@ -226,7 +259,12 @@ fn cursor_rules(
     })
 }
 
-fn project_mcp(paths: &AgentHubPaths, target: Target, target_path: &Path) -> Result<Vec<u8>> {
+fn project_mcp(
+    paths: &AgentHubPaths,
+    target: Target,
+    target_path: &Path,
+    selected: Option<&Vec<String>>,
+) -> Result<Vec<u8>> {
     let mut servers = Map::new();
     for entry in fs::read_dir(&paths.mcp)? {
         let entry = entry?;
@@ -235,6 +273,11 @@ fn project_mcp(paths: &AgentHubPaths, target: Target, target_path: &Path) -> Res
             continue;
         }
         let s: McpServer = serde_json::from_slice(&fs::read(&p)?)?;
+        if let Some(selected) = selected {
+            if !selected.iter().any(|id| id == &s.id) {
+                continue;
+            }
+        }
         let mut v = Map::new();
         match s.transport.as_str() {
             "stdio" => {

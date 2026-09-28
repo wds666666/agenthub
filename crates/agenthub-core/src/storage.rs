@@ -1,4 +1,4 @@
-use crate::models::{Plan, Target, Transaction};
+use crate::models::{AutoSyncProfile, Plan, SyncSelection, Target, Transaction};
 use anyhow::Result;
 use rusqlite::{params, Connection, OptionalExtension};
 use std::{path::Path, sync::Mutex};
@@ -60,6 +60,30 @@ impl Store {
             .filter_map(|v| v.ok().and_then(|s| s.parse().ok()))
             .collect();
         Ok(result)
+    }
+    pub fn auto_sync_profiles(&self) -> Result<Vec<AutoSyncProfile>> {
+        Target::ALL
+            .iter()
+            .map(|target| {
+                let key = format!("auto_sync_profile_{}", target.as_str());
+                self.meta(&key)?.map_or_else(
+                    || {
+                        Ok(AutoSyncProfile {
+                            target: *target,
+                            enabled: false,
+                            selection: SyncSelection::default(),
+                        })
+                    },
+                    |payload| Ok(serde_json::from_str(&payload)?),
+                )
+            })
+            .collect()
+    }
+    pub fn set_auto_sync_profile(&self, profile: &AutoSyncProfile) -> Result<()> {
+        self.set_meta(
+            &format!("auto_sync_profile_{}", profile.target.as_str()),
+            &serde_json::to_string(profile)?,
+        )
     }
     pub fn save_plan(&self, plan: &Plan) -> Result<()> {
         self.conn().execute(

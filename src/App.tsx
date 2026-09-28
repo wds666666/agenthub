@@ -35,7 +35,7 @@ import {
   Upload,
   UserRound,
 } from "lucide-react";
-import { api, type Capability, type CapabilityDetail, type Dashboard, type GitIdentity, type Kind, type Plan, type RuleDocument, type ScanItem, type Target } from "./lib/api";
+import { api, type AutoSyncProfile, type Capability, type CapabilityDetail, type CapabilityMutationResult, type Dashboard, type GitIdentity, type Kind, type Plan, type RuleDocument, type ScanItem, type SyncSelection, type Target, type Transaction } from "./lib/api";
 import { t } from "./lib/i18n";
 import agentHubLogo from "./assets/agenthub-logo.png";
 import { Button, Dialog, PageHeader, SearchField, StatusBadge, Toast } from "./components/ui";
@@ -62,6 +62,20 @@ const kindMeta: Array<{ id: Kind; icon: Icon; accent: string }> = [
   { id: "rule", icon: FileText, accent: "amber" },
 ];
 
+const fullSelection = (items: Capability[]): SyncSelection => ({
+  skills: items.filter((item) => item.kind === "skill").map((item) => item.id),
+  plugins: items.filter((item) => item.kind === "plugin").map((item) => item.id),
+  mcp: items.filter((item) => item.kind === "mcp").map((item) => item.id),
+  rules: items.some((item) => item.kind === "rule"),
+});
+const hasSelection = (selection: SyncSelection) => selection.skills.length + selection.plugins.length + selection.mcp.length > 0 || selection.rules;
+const sameIds = (left: string[], right: string[]) => JSON.stringify([...left].sort()) === JSON.stringify([...right].sort());
+const sameSelection = (left?: SyncSelection | null, right?: SyncSelection | null) => Boolean(left && right
+  && left.rules === right.rules
+  && sameIds(left.skills, right.skills)
+  && sameIds(left.plugins, right.plugins)
+  && sameIds(left.mcp, right.mcp));
+
 const targetMeta: Array<{ id: Target; mark: string; description: string }> = [
   { id: "cursor", mark: "CU", description: "Cursor" },
   { id: "codex", mark: "CX", description: "OpenAI Codex" },
@@ -79,6 +93,10 @@ function transactionStatus(status: string) {
     rolling_back: "statusRollingBack",
   };
   return keys[status] ? t(`transactions.${keys[status]}`) : status;
+}
+
+function transactionMode(mode: Transaction["mode"]) {
+  return t(`transactions.${mode === "auto_sync" || mode === "default_sync" ? "modeAuto" : mode === "rollback" ? "modeRollback" : "modeReviewed"}`);
 }
 
 export default function App() {
@@ -125,7 +143,7 @@ export default function App() {
   const content = {
     overview: <Overview data={dashboard} />,
     inventory: <Inventory onChanged={refresh} onNotify={setToast} />,
-    sync: <Sync onApplied={() => { setToast(t("toast.applied")); refresh(); }} />,
+    sync: <Sync onApplied={refresh} onNotify={setToast} />,
     git: <GitPage onCommitted={() => { setToast(t("toast.committed")); refresh(); }} />,
     transactions: <Transactions data={dashboard} onChanged={refresh} onNotify={setToast} />,
     settings: <SettingsPage data={dashboard} />,
@@ -205,7 +223,7 @@ function Overview({ data }: { data: Dashboard }) {
             {data.recent_transactions.map((tx) => (
               <article className="transaction-row" key={tx.id}>
                 <span className="transaction-row__icon"><CheckCircle2 size={18} /></span>
-                <div><strong>{t(`targets.${tx.target}`)}</strong><code>{tx.id.slice(0, 12)}</code></div>
+                <div><strong>{t(`targets.${tx.target}`)} · {transactionMode(tx.mode ?? "reviewed")}</strong><code>{tx.id.slice(0, 12)}</code></div>
                 <time>{new Date(tx.created_at).toLocaleString()}</time>
                 <StatusBadge tone={tx.status === "applied" || tx.status === "rollback_applied" ? "ok" : "warning"}>{transactionStatus(tx.status)}</StatusBadge>
               </article>
@@ -267,11 +285,15 @@ function Inventory({ onChanged, onNotify }: { onChanged: () => void; onNotify: (
     catch { setLoadError(t("inventory.detailLoadFailed")); }
     finally { setLoadingDetail(""); }
   };
-  const saved = () => {
+  const saved = (result: CapabilityMutationResult) => {
     setEditor(null);
     loadInventory();
     onChanged();
-    onNotify(t("toast.ruleSaved"));
+    const failed = result.auto_sync.filter((outcome) => outcome.error);
+    const changed = result.auto_sync.filter((outcome) => outcome.changed);
+    if (failed.length) onNotify(`${t("toast.ruleSavedAutoFailed")} ${failed.map((outcome) => t(`targets.${outcome.target}`)).join("、")}`);
+    else if (changed.length) onNotify(`${t("toast.ruleSavedAutoSynced")} ${changed.map((outcome) => t(`targets.${outcome.target}`)).join("、")}`);
+    else onNotify(t("toast.ruleSaved"));
   };
 
   return (
@@ -360,7 +382,7 @@ function CapabilityDetailDialog({ detail, onClose, onEditRule }: { detail: Capab
   );
 }
 
-function RuleEditor({ initial, create, imported, onClose, onSaved }: { initial: RuleDocument; create: boolean; imported: boolean; onClose: () => void; onSaved: () => void }) {
+function RuleEditor({ initial, create, imported, onClose, onSaved }: { initial: RuleDocument; create: boolean; imported: boolean; onClose: () => void; onSaved: (result: CapabilityMutationResult) => void }) {
   const [draft, setDraft] = useState(initial);
   const [pathsText, setPathsText] = useState(initial.paths.join("\n"));
   const [dirty, setDirty] = useState(imported);
@@ -395,10 +417,10 @@ function RuleEditor({ initial, create, imported, onClose, onSaved }: { initial: 
     setBusy(true); setError("");
     void api.debugEvent("rule_save_click", `id=${draft.id} create=${create}`);
     try {
-      await api.saveRule({ ...draft, displayName: draft.displayName.trim(), paths }, create);
+      const result = await api.saveRule({ ...draft, displayName: draft.displayName.trim(), paths }, create);
       void api.debugEvent("rule_save_ok", `id=${draft.id}`);
       setDirty(false);
-      onSaved();
+      onSaved(result);
     } catch (value) { void api.debugEvent("rule_save_failed", `id=${draft.id}`); setError(String(value)); }
     finally { setBusy(false); }
   };
@@ -437,23 +459,54 @@ function RuleEditor({ initial, create, imported, onClose, onSaved }: { initial: 
   );
 }
 
-function Sync({ onApplied }: { onApplied: () => void }) {
+function Sync({ onApplied, onNotify }: { onApplied: () => void; onNotify: (message: string) => void }) {
   const [target, setTarget] = useState<Target>("codex");
   const [plan, setPlan] = useState<Plan | null>(null);
+  const [inventory, setInventory] = useState<Capability[]>([]);
+  const [profiles, setProfiles] = useState<AutoSyncProfile[]>([]);
+  const [selection, setSelection] = useState<SyncSelection | null>(null);
+  const [selectionQuery, setSelectionQuery] = useState("");
   const [busy, setBusy] = useState(false);
-  const [confirm, setConfirm] = useState(false);
+  const [confirm, setConfirm] = useState<"reviewed" | "enable_auto" | "disable_auto" | null>(null);
   const [error, setError] = useState("");
   const planSummary = useMemo(() => kindMeta.map((kind) => ({
     ...kind,
     summary: plan?.summary?.find((item) => item.kind === kind.id) ?? { kind: kind.id, affected: 0, create: 0, update: 0, delete: 0, skip: 0, files: 0 },
   })), [plan]);
   const affectedCapabilities = planSummary.reduce((sum, item) => sum + item.summary.affected, 0);
+  useEffect(() => {
+    Promise.all([api.inventory(), api.autoSyncProfiles()]).then(([items, nextProfiles]) => {
+      setInventory(items);
+      setProfiles(nextProfiles);
+      const saved = nextProfiles.find((profile) => profile.target === target);
+      setSelection(saved && hasSelection(saved.selection) ? saved.selection : fullSelection(items));
+    }).catch((value) => setError(String(value)));
+  }, [target]);
+  const currentProfile = profiles.find((profile) => profile.target === target);
+  const autoEnabled = Boolean(currentProfile?.enabled);
+  const scopeChanged = autoEnabled && !sameSelection(selection, currentProfile?.selection);
+  const selectionItems = useMemo(() => inventory.filter((item) => `${item.id} ${item.display_name}`.toLowerCase().includes(selectionQuery.toLowerCase())), [inventory, selectionQuery]);
+  const selectedCount = selection ? selection.skills.length + selection.plugins.length + selection.mcp.length + (selection.rules ? inventory.filter((item) => item.kind === "rule").length : 0) : 0;
+  const toggleCapability = (item: Capability) => {
+    if (!selection) return;
+    const key = item.kind === "skill" ? "skills" : item.kind === "plugin" ? "plugins" : "mcp";
+    const values = selection[key];
+    setSelection({ ...selection, [key]: values.includes(item.id) ? values.filter((id) => id !== item.id) : [...values, item.id] });
+    setPlan(null);
+  };
+  const chooseTarget = (nextTarget: Target) => {
+    setTarget(nextTarget);
+    setPlan(null);
+    const saved = profiles.find((profile) => profile.target === nextTarget);
+    setSelection(saved && hasSelection(saved.selection) ? saved.selection : fullSelection(inventory));
+  };
 
   const makePlan = async () => {
     setBusy(true);
     setError("");
     void api.debugEvent("sync_plan_click", `target=${target}`);
-    try { const next = await api.plan(target); setPlan(next); void api.debugEvent("sync_plan_ready", `target=${target} steps=${next.steps.length}`); }
+    if (!selection) { setBusy(false); return; }
+    try { const next = await api.plan(target, selection); setPlan(next); void api.debugEvent("sync_plan_ready", `target=${target} steps=${next.steps.length}`); }
     catch (value) { void api.debugEvent("sync_plan_failed", `target=${target}`); setError(String(value)); }
     finally { setBusy(false); }
   };
@@ -465,10 +518,35 @@ function Sync({ onApplied }: { onApplied: () => void }) {
     try {
       await api.apply(plan.id);
       void api.debugEvent("sync_apply_ok", `target=${target} plan=${plan.id}`);
-      setConfirm(false);
+      setConfirm(null);
       setPlan(null);
       onApplied();
+      onNotify(t("toast.applied"));
     } catch (value) { void api.debugEvent("sync_apply_failed", `target=${target} plan=${plan.id}`); setError(String(value)); } finally { setBusy(false); }
+  };
+  const configureAutoSync = async (enabled: boolean) => {
+    if (!selection) return;
+    setBusy(true);
+    setError("");
+    void api.debugEvent("auto_sync_configure_click", `target=${target} enabled=${enabled} selected=${selectedCount}`);
+    try {
+      const effectiveSelection = enabled ? selection : currentProfile?.selection ?? selection;
+      const result = await api.setAutoSync(target, effectiveSelection, enabled);
+      setProfiles((current) => [...current.filter((profile) => profile.target !== target), result.profile]);
+      setConfirm(null);
+      setPlan(null);
+      if (result.initial_sync?.changed) {
+        onApplied();
+        onNotify(t("toast.autoEnabledSynced"));
+      } else if (enabled) {
+        onNotify(t("toast.autoEnabled"));
+      } else {
+        onNotify(t("toast.autoDisabled"));
+      }
+    } catch (value) {
+      void api.debugEvent("auto_sync_configure_failed", `target=${target} enabled=${enabled}`);
+      setError(String(value));
+    } finally { setBusy(false); }
   };
 
   return (
@@ -484,16 +562,36 @@ function Sync({ onApplied }: { onApplied: () => void }) {
                 role="tab"
                 aria-selected={target === item.id}
                 className={target === item.id ? "is-selected" : ""}
-                onClick={() => { setTarget(item.id); setPlan(null); }}
+                onClick={() => chooseTarget(item.id)}
                 key={item.id}
               >
                 <span className="target-tab__mark">{item.mark}</span>
-                <span><strong>{t(`targets.${item.id}`)}</strong><small>{item.description}</small></span>
+                <span><strong>{t(`targets.${item.id}`)}</strong><small className={profiles.find((profile) => profile.target === item.id)?.enabled ? "is-auto" : undefined}>{profiles.find((profile) => profile.target === item.id)?.enabled ? t("sync.autoOn") : item.description}</small></span>
                 <span className="target-tab__radio"><CheckCircle2 size={18} /></span>
               </button>
             ))}
           </div>
         </div>
+
+        <section className="material sync-selection">
+          <header className="sync-selection__header">
+            <div><p className="eyebrow">SYNC SCOPE</p><h2>{t("sync.scopeTitle")}</h2><p>{t("sync.scopeHint")}</p></div>
+            <StatusBadge tone="ok">{selectedCount} / {inventory.length} {t("sync.selected")}</StatusBadge>
+          </header>
+          <div className="sync-selection__toolbar">
+            <SearchField value={selectionQuery} onChange={setSelectionQuery} />
+            <Button variant="quiet" disabled={!selection} onClick={() => selection && setSelection({ ...selection, skills: inventory.filter((item) => item.kind === "skill").map((item) => item.id), plugins: inventory.filter((item) => item.kind === "plugin").map((item) => item.id), mcp: inventory.filter((item) => item.kind === "mcp").map((item) => item.id), rules: inventory.some((item) => item.kind === "rule") })}>{t("sync.selectAll")}</Button>
+            <Button variant="quiet" disabled={!selection} onClick={() => selection && setSelection({ ...selection, skills: [], plugins: [], mcp: [], rules: false })}>{t("sync.clearAll")}</Button>
+          </div>
+          <div className="sync-selection__groups">
+            {(["skill", "plugin", "mcp"] as const).map((kind) => {
+              const items = selectionItems.filter((item) => item.kind === kind);
+              const selected = selection?.[kind === "skill" ? "skills" : kind === "plugin" ? "plugins" : "mcp"] ?? [];
+              return <details open key={kind} className="sync-selection__group"><summary><span>{t(`kinds.${kind}`)}</span><small>{selected.length} / {inventory.filter((item) => item.kind === kind).length}</small></summary><div>{items.map((item) => <label key={item.id} className={selected.includes(item.id) ? "is-selected" : ""}><input type="checkbox" checked={selected.includes(item.id)} onChange={() => toggleCapability(item)} /><span className="sync-selection__check"><CheckCircle2 size={15} /></span><span><strong>{item.display_name}</strong><small>{item.id}</small></span></label>)}</div></details>;
+            })}
+            <label className={`sync-selection__rules ${selection?.rules ? "is-selected" : ""}`}><input type="checkbox" checked={Boolean(selection?.rules)} onChange={() => { if (selection) { setSelection({ ...selection, rules: !selection.rules }); setPlan(null); } }} /><span className="sync-selection__check"><CheckCircle2 size={15} /></span><span><strong>{t("kinds.rule")}</strong><small>{t("sync.rulesToggle")}</small></span><StatusBadge tone={selection?.rules ? "ok" : "warning"}>{selection?.rules ? t("sync.included") : t("sync.excluded")}</StatusBadge></label>
+          </div>
+        </section>
 
         <div className="warning-band"><ShieldCheck size={19} /><span>{t("sync.warning")}</span></div>
         {error && <div className="inline-error" role="alert"><Activity size={18} /><span>{error}</span></div>}
@@ -506,7 +604,11 @@ function Sync({ onApplied }: { onApplied: () => void }) {
               <h2>{plan ? (plan.steps.length ? `${affectedCapabilities} ${t("sync.capabilityChanges")} · ${plan.steps.length} ${t("sync.steps")}` : t("sync.noChanges")) : t("sync.noPlan")}</h2>
               <p>{plan ? t("sync.ready") : t("sync.noPlanHint")}</p>
             </div>
-            <Button onClick={makePlan} disabled={busy}>{busy ? <RefreshCw className="spin" size={17} /> : <Braces size={17} />} {busy ? t("sync.planning") : t("sync.plan")}</Button>
+            <div className="plan-panel__actions">
+              <Button variant="secondary" onClick={makePlan} disabled={busy || !selection}>{busy ? <RefreshCw className="spin" size={17} /> : <Braces size={17} />} {busy ? t("sync.planning") : t("sync.plan")}</Button>
+              <Button onClick={() => setConfirm("enable_auto")} disabled={busy || !selection || selectedCount === 0 || (autoEnabled && !scopeChanged)}><Radio size={17} /> {autoEnabled ? (scopeChanged ? t("sync.updateAuto") : t("sync.autoEnabled")) : t("sync.enableAuto")}</Button>
+              {autoEnabled && <Button variant="quiet" onClick={() => setConfirm("disable_auto")} disabled={busy}>{t("sync.disableAuto")}</Button>}
+            </div>
           </div>
 
           <div className="sync-phases" aria-label={t("sync.confirmBody")}>
@@ -549,20 +651,21 @@ function Sync({ onApplied }: { onApplied: () => void }) {
               )}
               {plan.steps.length > 0 && <div className="apply-bar">
                 <span><ShieldCheck size={18} /> {t("sync.confirmBody")}</span>
-                <Button variant="danger" onClick={() => setConfirm(true)}>{t("sync.apply")} <ArrowRight size={17} /></Button>
+                <Button variant="danger" onClick={() => setConfirm("reviewed")}>{t("sync.apply")} <ArrowRight size={17} /></Button>
               </div>}
             </>
           )}
         </section>
       </section>
       <Dialog
-        open={confirm}
-        onClose={() => setConfirm(false)}
-        title={t("sync.confirmTitle")}
-        actions={<><Button variant="secondary" onClick={() => setConfirm(false)}>{t("common.cancel")}</Button><Button variant="danger" disabled={busy} onClick={apply}>{t("sync.apply")}</Button></>}
+        open={Boolean(confirm)}
+        onClose={() => { if (!busy) setConfirm(null); }}
+        title={t(confirm === "enable_auto" ? "sync.autoConfirmTitle" : confirm === "disable_auto" ? "sync.disableAutoTitle" : "sync.confirmTitle")}
+        actions={<><Button variant="secondary" disabled={busy} onClick={() => setConfirm(null)}>{t("common.cancel")}</Button><Button variant={confirm === "disable_auto" || confirm === "reviewed" ? "danger" : "primary"} disabled={busy} onClick={confirm === "enable_auto" ? () => configureAutoSync(true) : confirm === "disable_auto" ? () => configureAutoSync(false) : apply}>{busy ? <RefreshCw className="spin" size={16} /> : <ShieldCheck size={16} />}{t(confirm === "enable_auto" ? "sync.autoConfirmAction" : confirm === "disable_auto" ? "sync.disableAutoAction" : "sync.apply")}</Button></>}
       >
-        <p>{t("sync.confirmBody")}</p>
-        <code className="dialog-code">{plan?.id}</code>
+        <p>{t(confirm === "enable_auto" ? "sync.autoConfirmBody" : confirm === "disable_auto" ? "sync.disableAutoBody" : "sync.confirmBody")}</p>
+        <div className="rollback-target"><span className="target-tab__mark">{targetMeta.find((item) => item.id === target)?.mark}</span><span><strong>{t(`targets.${target}`)}</strong><small>{selectedCount} {t("sync.selected")}</small></span></div>
+        {confirm === "reviewed" && <code className="dialog-code">{plan?.id}</code>}
       </Dialog>
     </>
   );
@@ -645,6 +748,18 @@ function Transactions({ data, onChanged, onNotify }: { data: Dashboard; onChange
     catch (value) { setError(`${t("transactions.historyLoadFailed")} ${String(value)}`); }
   }, []);
   useEffect(() => { void load(); }, [load]);
+  const historyGroups = useMemo(() => {
+    const groups: Array<{ key: string; quick: boolean; items: Transaction[] }> = [];
+    for (const tx of transactions) {
+      const quick = ((tx.mode ?? "reviewed") === "auto_sync" || tx.mode === "default_sync") && tx.status === "applied";
+      const day = new Date(tx.created_at).toLocaleDateString();
+      const key = quick ? `${tx.target}-${day}` : tx.id;
+      const previous = groups.at(-1);
+      if (quick && previous?.quick && previous.key === key) previous.items.push(tx);
+      else groups.push({ key, quick, items: [tx] });
+    }
+    return groups;
+  }, [transactions]);
   const rollback = async () => {
     if (!rollbackCandidate) return;
     setBusy(true); setError("");
@@ -660,6 +775,18 @@ function Transactions({ data, onChanged, onNotify }: { data: Dashboard; onChange
       setError(String(value));
     } finally { setBusy(false); }
   };
+  const transactionRow = (tx: Transaction) => (
+    <article key={tx.id}>
+      <span className={`history-timeline__point ${tx.status === "rollback_applied" ? "is-rollback" : ""}`}>{tx.status === "rollback_applied" ? <RotateCcw size={18} /> : <CheckCircle2 size={18} />}</span>
+      <div className="history-timeline__copy">
+        <span><strong>{t(`targets.${tx.target}`)}</strong><StatusBadge tone={tx.status === "applied" || tx.status === "rollback_applied" ? "ok" : "warning"}>{transactionStatus(tx.status)}</StatusBadge><StatusBadge>{transactionMode(tx.mode ?? "reviewed")}</StatusBadge></span>
+        <code>{tx.id}</code>
+        <time>{new Date(tx.created_at).toLocaleString()}</time>
+        {(tx.status === "applied" || tx.status === "rollback_applied") && <small><ShieldCheck size={13} /> {tx.status === "rollback_applied" ? t("transactions.verifiedRollback") : t("transactions.verifiedApply")}</small>}
+      </div>
+      {(tx.status === "applied" || tx.status === "rollback_applied") && <Button variant="secondary" onClick={() => setRollbackCandidate(tx)}><RotateCcw size={15} />{tx.status === "applied" ? t("transactions.rollbackApply") : t("transactions.rollbackRollback")}</Button>}
+    </article>
+  );
   return (
     <>
       <PageHeader title={t("nav.transactions")} subtitle={t("transactions.subtitle")} />
@@ -667,18 +794,12 @@ function Transactions({ data, onChanged, onNotify }: { data: Dashboard; onChange
         {error && <div className="inline-error" role="alert"><Activity size={18} /><span>{error}</span></div>}
         {transactions.length ? (
           <div className="history-timeline">
-            {transactions.map((tx) => (
-              <article key={tx.id}>
-                <span className={`history-timeline__point ${tx.status === "rollback_applied" ? "is-rollback" : ""}`}>{tx.status === "rollback_applied" ? <RotateCcw size={18} /> : <CheckCircle2 size={18} />}</span>
-                <div className="history-timeline__copy">
-                  <span><strong>{t(`targets.${tx.target}`)}</strong><StatusBadge tone={tx.status === "applied" || tx.status === "rollback_applied" ? "ok" : "warning"}>{transactionStatus(tx.status)}</StatusBadge></span>
-                  <code>{tx.id}</code>
-                  <time>{new Date(tx.created_at).toLocaleString()}</time>
-                  {(tx.status === "applied" || tx.status === "rollback_applied") && <small><ShieldCheck size={13} /> {tx.status === "rollback_applied" ? t("transactions.verifiedRollback") : t("transactions.verifiedApply")}</small>}
-                </div>
-                {(tx.status === "applied" || tx.status === "rollback_applied") && <Button variant="secondary" onClick={() => setRollbackCandidate(tx)}><RotateCcw size={15} />{tx.status === "applied" ? t("transactions.rollbackApply") : t("transactions.rollbackRollback")}</Button>}
-              </article>
-            ))}
+            {historyGroups.map((group) => group.quick && group.items.length > 1 ? (
+              <details className="history-batch" key={group.key}>
+                <summary><span><Shuffle size={16} /><strong>{t(`targets.${group.items[0].target}`)} · {t("transactions.autoBatch")}</strong></span><span>{group.items.length} {t("transactions.runs")}<ChevronRight size={15} /></span></summary>
+                <div>{group.items.map(transactionRow)}</div>
+              </details>
+            ) : transactionRow(group.items[0]))}
           </div>
         ) : <EmptyState icon={History} title={t("transactions.emptyTitle")} body={t("transactions.emptyBody")} />}
       </section>

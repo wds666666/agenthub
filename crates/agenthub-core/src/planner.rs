@@ -1,8 +1,10 @@
 use crate::{
-    adapters::{actual_files, projection},
+    adapters::{actual_files, projection_with_selection},
     canonical::{canonical_digest, sha256},
     git,
-    models::{CapabilityKind, Plan, PlanAction, PlanCapabilitySummary, PlanStep, Target},
+    models::{
+        CapabilityKind, Plan, PlanAction, PlanCapabilitySummary, PlanStep, SyncSelection, Target,
+    },
     paths::AgentHubPaths,
 };
 use anyhow::Result;
@@ -78,9 +80,17 @@ fn summarize(
 }
 
 pub fn create(paths: &AgentHubPaths, target: Target) -> Result<Plan> {
+    create_with_selection(paths, target, None)
+}
+
+pub fn create_with_selection(
+    paths: &AgentHubPaths,
+    target: Target,
+    selection: Option<&SyncSelection>,
+) -> Result<Plan> {
     let canonical = canonical_digest(paths)?;
     let git = git::snapshot(&paths.root)?;
-    let domains = projection(paths, target)?;
+    let domains = projection_with_selection(paths, target, selection)?;
     let mut steps = Vec::new();
     let mut warnings = Vec::new();
     let mut expected = Sha256::new();
@@ -159,6 +169,7 @@ pub fn create(paths: &AgentHubPaths, target: Target) -> Result<Plan> {
         expected_digest: hex::encode(expected.finalize()),
         git,
         steps,
+        selection: selection.cloned(),
         summary,
         warnings,
         created_at: Utc::now().to_rfc3339(),

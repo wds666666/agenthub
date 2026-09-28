@@ -26,7 +26,7 @@ Desktop uses a floating glass navigation rail whose width scales from 248px to 2
 
 The signature component is the **Canonical Flow**: a luminous source node, four capability streams, and three destination cards. It communicates inventory and target readiness without pretending to be an interactive diagram.
 
-The AgentHub brand mark is a blue rounded-square hub with four capability nodes and a central bidirectional flow. The same raster source is used for the in-app brand, window icon, and generated package icon set. Capability stream lengths are data-bound to their displayed counts: the largest non-zero inventory occupies the full track, zero has no fill, and other domains scale proportionally.
+The AgentHub brand mark is a restrained graphite rounded square containing one continuous electric-blue orchestration symbol: a central Canonical core with three projection channels, whose negative space suggests an abstract “A”. It stays flat and legible at 16–32px; glow, circular arrows, robot-face geometry, decorative nodes and literal lettering are prohibited. The same raster source is used for the in-app brand, window icon, and generated package icon set. Capability stream lengths are data-bound to their displayed counts: the largest non-zero inventory occupies the full track, zero has no fill, and other domains scale proportionally.
 
 ## 4. Components
 
