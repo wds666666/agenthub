@@ -217,7 +217,7 @@ fn write_domain(d: &DomainProjection) -> Result<()> {
         if d.sensitive {
             set_private_file(&temp)?;
         }
-        fs::rename(temp, &d.target_path)?;
+        replace_file(&temp, &d.target_path)?;
         return Ok(());
     }
     let parent = d.target_path.parent().context("domain parent")?;
@@ -249,6 +249,27 @@ fn write_domain(d: &DomainProjection) -> Result<()> {
     }
     if old.exists() {
         fs::remove_dir_all(old)?;
+    }
+    Ok(())
+}
+
+fn replace_file(source: &Path, target: &Path) -> Result<()> {
+    if !target.exists() {
+        fs::rename(source, target)?;
+        return Ok(());
+    }
+
+    let parent = target.parent().context("file projection parent")?;
+    let old = parent.join(format!(".agenthub-old-{}", Uuid::new_v4()));
+    fs::rename(target, &old)?;
+    if let Err(error) = fs::rename(source, target) {
+        let _ = fs::rename(&old, target);
+        return Err(error.into());
+    }
+    if let Err(error) = fs::remove_file(&old) {
+        let _ = fs::remove_file(target);
+        let _ = fs::rename(&old, target);
+        return Err(error.into());
     }
     Ok(())
 }

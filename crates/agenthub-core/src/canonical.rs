@@ -328,10 +328,10 @@ pub fn save_rule(paths: &AgentHubPaths, rule: &RuleDocument, create: bool) -> Re
     if old.exists() {
         fs::remove_dir_all(old)?;
     }
-    Ok(inventory(paths)?
+    inventory(paths)?
         .into_iter()
         .find(|item| item.kind == CapabilityKind::Rule && item.id == rule.id)
-        .context("saved rule missing from inventory")?)
+        .context("saved rule missing from inventory")
 }
 pub fn canonical_digest(paths: &AgentHubPaths) -> Result<String> {
     let mut hasher = Sha256::new();

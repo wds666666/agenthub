@@ -1,0 +1,66 @@
+[CmdletBinding()]
+param(
+    [switch]$SkipInstall,
+    [ValidateSet("all", "nsis", "msi")]
+    [string]$Bundle = "all"
+)
+
+$ErrorActionPreference = "Stop"
+Set-StrictMode -Version Latest
+
+if ([System.Environment]::OSVersion.Platform -ne [System.PlatformID]::Win32NT) {
+    throw "Windows packages must be built from a Windows host."
+}
+
+$repoRoot = Split-Path -Parent $PSScriptRoot
+Set-Location $repoRoot
+
+foreach ($command in @("git", "cargo", "pnpm")) {
+    if (-not (Get-Command $command -ErrorAction SilentlyContinue)) {
+        throw "Required command is unavailable: $command"
+    }
+}
+cargo tauri --version | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "Tauri CLI is unavailable; install tauri-cli 2.12.0" }
+
+if (-not $SkipInstall) {
+    pnpm install --frozen-lockfile
+    if ($LASTEXITCODE -ne 0) { throw "pnpm install failed" }
+}
+
+pnpm lint
+if ($LASTEXITCODE -ne 0) { throw "frontend lint failed" }
+pnpm test
+if ($LASTEXITCODE -ne 0) { throw "frontend tests failed" }
+cargo test -p agenthub-core
+if ($LASTEXITCODE -ne 0) { throw "Rust tests failed" }
+
+cargo build --release -p agenthub-cli
+if ($LASTEXITCODE -ne 0) { throw "AgentHub CLI build failed" }
+
+$sidecarDir = Join-Path $repoRoot "src-tauri/binaries"
+New-Item -ItemType Directory -Force -Path $sidecarDir | Out-Null
+$cliBinary = Join-Path $repoRoot "target/release/agenthub.exe"
+$sidecarBinary = Join-Path $sidecarDir "agenthub-x86_64-pc-windows-msvc.exe"
+Copy-Item $cliBinary $sidecarBinary -Force
+
+$bundleArgs = if ($Bundle -eq "all") { "nsis,msi" } else { $Bundle }
+pnpm tauri build --bundles $bundleArgs
+if ($LASTEXITCODE -ne 0) { throw "Tauri Windows package build failed" }
+
+$artifacts = @(
+    Get-ChildItem "target/release/bundle/nsis/*-setup.exe" -ErrorAction SilentlyContinue
+    Get-ChildItem "target/release/bundle/msi/*.msi" -ErrorAction SilentlyContinue
+    Get-Item "target/release/agenthub.exe"
+    Get-Item "target/release/agenthub-desktop.exe"
+)
+
+$checksumPath = Join-Path $repoRoot "target/release/bundle/SHA256SUMS.windows.txt"
+$artifacts | ForEach-Object {
+    $hash = (Get-FileHash -Algorithm SHA256 $_.FullName).Hash.ToLowerInvariant()
+    "$hash  $($_.Name)"
+} | Set-Content -Encoding ascii $checksumPath
+
+Write-Host "Windows artifacts:"
+$artifacts.FullName
+Write-Host $checksumPath
