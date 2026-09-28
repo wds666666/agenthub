@@ -8,7 +8,7 @@
       "allowDowngrades": false,
       "bundleVCRuntime": true,
       "webviewInstallMode": {
-        "type": "embedBootstrapper",
+        "type": "offlineInstaller",
         "silent": true
       },
       "nsis": {

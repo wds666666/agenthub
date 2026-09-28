@@ -4,7 +4,8 @@
 - A 256-bit `master.key` is generated from the OS CSPRNG. MCP secrets are encrypted in SQLite with XChaCha20-Poly1305, a random 192-bit nonce, versioned algorithm metadata and AAD binding the secret name and schema version.
 - Loss of the key never causes ciphertext deletion or replacement. Doctor reports the state as unrecoverable.
 - Logs, Plan payloads, errors, Diff and JSON output pass through structural redaction for tokens, passwords, authorization headers and secret values.
+- Desktop logs are written to the OS application log directory, never into Canonical Git history. Windows resolves this to `%LOCALAPPDATA%/dev.agenthub.desktop/logs`. Logs are size-bounded, contain operation names and sanitized identifiers rather than secret payloads, and may be copied for diagnostics. Release GUI builds do not expose a console.
 - Projections prefer OAuth, environment variables, env files or `SecretRef`. A target that requires plaintext produces a separate blocking warning and writes mode `0600` only after confirmation.
 - Plugin imports reject absolute paths, traversal, escaping symlinks, device/special files, unknown components and manifests that cannot be represented losslessly.
 - Scanner roots are a fixed allowlist derived from an explicit user home. The current directory and its ancestors are never inputs.
-
+- Initialization treats scan results as untrusted input. Empty/non-UTF-8/oversized Rules are non-importable, every selected item is re-scanned before import, and the complete staged Canonical inventory must validate before it replaces the empty destination.

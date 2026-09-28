@@ -48,11 +48,32 @@ $bundleArgs = if ($Bundle -eq "all") { "nsis,msi" } else { $Bundle }
 pnpm tauri build --bundles $bundleArgs
 if ($LASTEXITCODE -ne 0) { throw "Tauri Windows package build failed" }
 
+function Get-PESubsystem([string]$Path) {
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    if ($bytes.Length -lt 256 -or $bytes[0] -ne 0x4d -or $bytes[1] -ne 0x5a) {
+        throw "Not a valid PE executable: $Path"
+    }
+    $peOffset = [System.BitConverter]::ToInt32($bytes, 0x3c)
+    if ($peOffset -lt 0 -or ($peOffset + 94) -ge $bytes.Length) {
+        throw "Invalid PE header: $Path"
+    }
+    return [System.BitConverter]::ToUInt16($bytes, $peOffset + 24 + 68)
+}
+
+$desktopBinary = Join-Path $repoRoot "target/release/agenthub-desktop.exe"
+$builtCliBinary = Join-Path $repoRoot "target/release/agenthub.exe"
+if ((Get-PESubsystem $desktopBinary) -ne 2) {
+    throw "Desktop executable is not a Windows GUI subsystem binary; it would open a console window"
+}
+if ((Get-PESubsystem $builtCliBinary) -ne 3) {
+    throw "CLI executable is not a Windows console subsystem binary"
+}
+
 $artifacts = @(
     Get-ChildItem "target/release/bundle/nsis/*-setup.exe" -ErrorAction SilentlyContinue
     Get-ChildItem "target/release/bundle/msi/*.msi" -ErrorAction SilentlyContinue
-    Get-Item "target/release/agenthub.exe"
-    Get-Item "target/release/agenthub-desktop.exe"
+    Get-Item $builtCliBinary
+    Get-Item $desktopBinary
 )
 
 $checksumPath = Join-Path $repoRoot "target/release/bundle/SHA256SUMS.windows.txt"

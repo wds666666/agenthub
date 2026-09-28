@@ -2,6 +2,13 @@ use crate::models::{GitIdentity, GitSnapshot};
 use anyhow::{Context, Result};
 use std::{path::Path, process::Command};
 
+pub fn available() -> bool {
+    Command::new("git")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
 fn run(root: &Path, args: &[&str]) -> Result<String> {
     let out = Command::new("git")
         .arg("-C")

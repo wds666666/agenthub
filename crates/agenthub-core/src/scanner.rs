@@ -54,7 +54,7 @@ pub fn scan_global(paths: &AgentHubPaths, targets: &[Target]) -> Result<Vec<Scan
         collect_plugins(&paths.user_home.join(".codex/plugins"), "codex", &mut items)?;
         let p = paths.user_home.join(".codex/AGENTS.md");
         if p.is_file() {
-            items.push(item(CapabilityKind::Rule, "codex", p, None)?);
+            items.push(rule_item("codex", p)?);
         }
     }
     if wanted.contains(&Target::Claude) {
@@ -123,12 +123,7 @@ fn collect_markdown(root: &Path, source: &str, out: &mut Vec<ScanItem>) -> Resul
     for e in WalkDir::new(root).max_depth(4).follow_links(false) {
         let e = e?;
         if e.file_type().is_file() && e.path().extension().is_some_and(|x| x == "md") {
-            out.push(item(
-                CapabilityKind::Rule,
-                source,
-                e.path().to_path_buf(),
-                None,
-            )?);
+            out.push(rule_item(source, e.path().to_path_buf())?);
         }
     }
     Ok(())
@@ -171,7 +166,7 @@ fn item(
     kind: CapabilityKind,
     source: &str,
     path: PathBuf,
-    warning: Option<String>,
+    source_key: Option<String>,
 ) -> Result<ScanItem> {
     let digest = tree_digest(&path)?;
     let id = sha256(
@@ -180,7 +175,7 @@ fn item(
             source,
             kind.as_str(),
             path.display(),
-            warning.as_deref().unwrap_or(""),
+            source_key.as_deref().unwrap_or(""),
             digest
         )
         .as_bytes(),
@@ -192,8 +187,33 @@ fn item(
         digest,
         path,
         selected: false,
-        warning,
+        importable: true,
+        source_key,
+        warning: None,
     })
+}
+
+fn rule_item(source: &str, path: PathBuf) -> Result<ScanItem> {
+    let mut result = item(CapabilityKind::Rule, source, path.clone(), None)?;
+    let metadata = fs::metadata(&path)?;
+    if metadata.len() > 1_000_000 {
+        result.importable = false;
+        result.warning = Some("rule_too_large".into());
+        return Ok(result);
+    }
+    let bytes = fs::read(&path)?;
+    match std::str::from_utf8(&bytes) {
+        Ok(body) if body.trim().is_empty() => {
+            result.importable = false;
+            result.warning = Some("rule_empty".into());
+        }
+        Ok(_) => {}
+        Err(_) => {
+            result.importable = false;
+            result.warning = Some("rule_invalid_encoding".into());
+        }
+    }
+    Ok(result)
 }
 
 /// The entire allowlist. Kept public so tests can prove that cwd/project paths cannot enter a scan.

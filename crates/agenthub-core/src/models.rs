@@ -105,7 +105,15 @@ pub struct ScanItem {
     pub path: PathBuf,
     pub digest: String,
     pub selected: bool,
+    #[serde(default = "default_true")]
+    pub importable: bool,
+    #[serde(default)]
+    pub source_key: Option<String>,
     pub warning: Option<String>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

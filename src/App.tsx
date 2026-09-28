@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   Activity,
+  AlertTriangle,
   ArrowRight,
   Boxes,
   Braces,
@@ -35,7 +36,7 @@ import {
   Upload,
   UserRound,
 } from "lucide-react";
-import { api, type AutoSyncProfile, type Capability, type CapabilityDetail, type CapabilityMutationResult, type Dashboard, type GitIdentity, type Kind, type Plan, type RuleDocument, type ScanItem, type SyncSelection, type Target, type Transaction } from "./lib/api";
+import { api, type AutoSyncProfile, type Capability, type CapabilityDetail, type CapabilityMutationResult, type Dashboard, type GitIdentity, type Kind, type Plan, type RuleDocument, type RuntimeDiagnostics, type ScanItem, type SyncSelection, type Target, type Transaction } from "./lib/api";
 import { t } from "./lib/i18n";
 import agentHubLogo from "./assets/agenthub-logo.png";
 import { Button, Dialog, PageHeader, SearchField, StatusBadge, Toast } from "./components/ui";
@@ -102,7 +103,9 @@ function transactionMode(mode: Transaction["mode"]) {
 export default function App() {
   const [page, setPage] = useState<Page>("overview");
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
+  const [diagnostics, setDiagnostics] = useState<RuntimeDiagnostics | null>(null);
   const [error, setError] = useState("");
+  const [repairing, setRepairing] = useState(false);
   const [toast, setToast] = useState("");
 
   const refresh = useCallback(() => {
@@ -111,6 +114,7 @@ export default function App() {
   }, []);
 
   useEffect(refresh, [refresh]);
+  useEffect(() => { api.runtimeDiagnostics().then(setDiagnostics).catch(() => undefined); }, []);
   useEffect(() => { document.title = `${t(`nav.${page}`)} · AgentHub`; }, [page]);
   useEffect(() => {
     if (!toast) return;
@@ -118,13 +122,25 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [toast]);
 
+  const resetFailedInitialization = async () => {
+    if (!window.confirm(t("init.legacyResetConfirm"))) return;
+    setRepairing(true);
+    try { await api.resetFailedInitialization(); setDashboard(null); refresh(); }
+    catch (value) { setError(String(value)); }
+    finally { setRepairing(false); }
+  };
+
   if (error) {
     return (
       <main className="center-state">
         <span className="center-state__icon center-state__icon--danger"><Activity /></span>
         <h1>{t("toast.failed")}</h1>
         <p>{error}</p>
-        <Button onClick={refresh}><RefreshCw size={17} /> {t("common.retry")}</Button>
+        {diagnostics && <p className="diagnostic-hint">{t("common.logHint")}<code>{diagnostics.log_dir}</code></p>}
+        <div className="center-state__actions">
+          <Button variant="secondary" disabled={repairing} onClick={refresh}><RefreshCw size={17} /> {t("common.retry")}</Button>
+          {error.includes("rule body is required") && <Button variant="danger" disabled={repairing} onClick={() => void resetFailedInitialization()}>{repairing ? <RefreshCw className="spin" size={17} /> : <RotateCcw size={17} />}{t("init.legacyReset")}</Button>}
+        </div>
       </main>
     );
   }
@@ -818,10 +834,13 @@ function Transactions({ data, onChanged, onNotify }: { data: Dashboard; onChange
 }
 
 function SettingsPage({ data }: { data: Dashboard }) {
+  const [diagnostics, setDiagnostics] = useState<RuntimeDiagnostics | null>(null);
+  useEffect(() => { api.runtimeDiagnostics().then(setDiagnostics).catch(() => undefined); }, []);
   const cards = [
-    { icon: HardDrive, title: t("settings.canonical"), hint: t("settings.canonicalHint"), value: "~/.agenthub", meta: "Git", tone: "blue" },
+    { icon: HardDrive, title: t("settings.canonical"), hint: t("settings.canonicalHint"), value: diagnostics?.canonical_root ?? "~/.agenthub", meta: diagnostics ? (diagnostics.git_available ? t("settings.gitReady") : t("settings.gitMissing")) : "Git", tone: diagnostics && !diagnostics.git_available ? "amber" : "blue" },
     { icon: Database, title: t("settings.database"), hint: t("settings.databaseHint"), value: "state/agenthub.db", meta: t("settings.localOnly"), tone: "purple" },
     { icon: Radio, title: t("settings.targets"), hint: t("settings.targetsHint"), value: `${data.enabled_targets.length} ${t("settings.enabled")}`, meta: t("settings.healthy"), tone: "green" },
+    { icon: TerminalSquare, title: t("settings.logs"), hint: t("settings.logsHint"), value: diagnostics?.log_dir ?? t("settings.loadingPath"), meta: diagnostics?.platform ?? t("settings.localOnly"), tone: "blue" },
   ];
   return (
     <>
@@ -860,6 +879,7 @@ function Init({ onDone }: { onDone: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [recover, setRecover] = useState(false);
+  const importableItems = items?.filter((item) => item.importable) ?? [];
 
   const scan = async () => {
     setBusy(true); setError("");
@@ -903,24 +923,24 @@ function Init({ onDone }: { onDone: () => void }) {
         ) : (
           <section className="scan-results">
             <header className="scan-toolbar">
-              <div><h2>{t("init.found")}</h2><small>{selected.size} {t("init.selected")} · {items.length} total</small></div>
-              <div><Button variant="quiet" disabled={busy || selected.size === items.length} onClick={() => setSelected(new Set(items.map((item) => item.id)))}>{t("init.selectAll")}</Button><Button variant="quiet" disabled={busy || selected.size === 0} onClick={() => setSelected(new Set())}>{t("init.clear")}</Button></div>
+              <div><h2>{t("init.found")}</h2><small>{selected.size} {t("init.selected")} · {importableItems.length} {t("init.importable")} · {items.length - importableItems.length} {t("init.rejected")}</small></div>
+              <div><Button variant="quiet" disabled={busy || selected.size === importableItems.length} onClick={() => setSelected(new Set(importableItems.map((item) => item.id)))}>{t("init.selectAll")}</Button><Button variant="quiet" disabled={busy || selected.size === 0} onClick={() => setSelected(new Set())}>{t("init.clear")}</Button></div>
             </header>
             <div className="scan-list">
               {!items.length && <EmptyState icon={Boxes} title={t("inventory.empty")} body={t("init.none")} />}
               {items.map((item) => {
                 const checked = selected.has(item.id);
                 return (
-                  <label className={checked ? "is-selected" : ""} key={item.id}>
-                    <input type="checkbox" disabled={busy} checked={checked} onChange={() => setSelected((old) => { const next = new Set(old); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next; })} />
-                    <span className="scan-check"><CheckCircle2 size={17} /></span>
-                    <span className="scan-copy"><strong>{item.path.split("/").pop()}</strong><small>{item.source} · {item.kind}</small></span>
-                    <code>{item.digest.slice(0, 8)}</code>
+                  <label className={`${checked ? "is-selected" : ""} ${!item.importable ? "is-disabled" : ""}`} key={item.id}>
+                    <input type="checkbox" disabled={busy || !item.importable} checked={checked} onChange={() => setSelected((old) => { const next = new Set(old); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next; })} />
+                    <span className="scan-check">{item.importable ? <CheckCircle2 size={17} /> : <AlertTriangle size={15} />}</span>
+                    <span className="scan-copy"><strong>{item.path.split(/[\\/]/).pop()}</strong><small>{item.source} · {item.kind}</small>{item.warning && <em>{t(`init.${item.warning}`)}</em>}</span>
+                    <code>{item.importable ? item.digest.slice(0, 8) : t("init.notImportable")}</code>
                   </label>
                 );
               })}
             </div>
-            <footer className="scan-footer"><span>{selected.size} / {items.length}</span><Button disabled={busy} onClick={finish}>{busy ? <RefreshCw className="spin" size={17} /> : <ArrowRight size={17} />} {busy ? t("init.importing") : t("init.import")}</Button></footer>
+            <footer className="scan-footer"><span>{selected.size} / {importableItems.length}</span><Button disabled={busy} onClick={finish}>{busy ? <RefreshCw className="spin" size={17} /> : <ArrowRight size={17} />} {busy ? t("init.importing") : t("init.import")}</Button></footer>
           </section>
         )}
       </section>

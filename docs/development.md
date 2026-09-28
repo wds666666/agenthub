@@ -54,8 +54,18 @@ target/release/agenthub.exe
 target/release/agenthub-desktop.exe
 ```
 
-The installer is per-user and does not require administrator rights. It includes the MSVC runtime, an embedded WebView2 bootstrapper, Chinese and English NSIS strings, the desktop application, and the `agenthub.exe` CLI sidecar. The bootstrapper may still need network access if WebView2 is absent; supported Windows 10/11 installations normally already include WebView2.
+The installer is per-user and does not require administrator rights. It includes the MSVC runtime, the offline WebView2 installer, Chinese and English NSIS strings, the desktop application, and the `agenthub.exe` CLI sidecar. The larger offline bundle prevents installation from depending on a WebView2 download. Release `agenthub-desktop.exe` uses the Windows GUI subsystem and must not open a console; `agenthub.exe` remains a console CLI. The packaging script reads both PE headers and rejects a desktop Console subsystem or a CLI GUI subsystem regression.
 
 The same build runs through `.github/workflows/windows-build.yml` for manual dispatches and `v*` tags. Windows artifacts are unsigned in v0.1; SmartScreen may warn until an Authenticode certificate and timestamp service are configured. MSI generation also requires the Windows VBSCRIPT optional feature, which is enabled on standard GitHub-hosted Windows runners.
 
 Do not treat Linux-to-Windows cross-compilation as the release path. Tauri supports NSIS cross-compilation with caveats, but MSI/WiX remains Windows-only; the native Windows workflow is the reproducible source for both installers.
+
+Windows smoke testing must cover more than process startup:
+
+- launch the installed desktop app from Explorer and confirm no console window appears;
+- run initialization with empty, UTF-16/non-UTF-8, oversized, CRLF, duplicate-name, and Windows-reserved-name resources;
+- verify invalid discoveries are visible but not selectable and that a failed import leaves Canonical empty;
+- test user homes containing spaces and non-ASCII characters, and keep Canonical/WebView2 data on a writable local profile path rather than UNC or network storage;
+- run without Git on `PATH` and confirm Doctor reports the dependency instead of presenting an opaque process error;
+- inspect `%LOCALAPPDATA%/dev.agenthub.desktop/logs` after a successful run and a forced import failure, confirming secret values are redacted;
+- verify both NSIS and MSI install/uninstall, offline WebView2 provisioning, SmartScreen behavior for unsigned builds, and SHA-256 checksums.

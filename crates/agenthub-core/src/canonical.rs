@@ -344,7 +344,33 @@ pub fn canonical_digest(paths: &AgentHubPaths) -> Result<String> {
     Ok(hex::encode(hasher.finalize()))
 }
 pub fn valid_id(id: &str) -> bool {
-    !id.is_empty()
+    let reserved = matches!(
+        id,
+        "con"
+            | "prn"
+            | "aux"
+            | "nul"
+            | "com1"
+            | "com2"
+            | "com3"
+            | "com4"
+            | "com5"
+            | "com6"
+            | "com7"
+            | "com8"
+            | "com9"
+            | "lpt1"
+            | "lpt2"
+            | "lpt3"
+            | "lpt4"
+            | "lpt5"
+            | "lpt6"
+            | "lpt7"
+            | "lpt8"
+            | "lpt9"
+    );
+    !reserved
+        && !id.is_empty()
         && id.len() <= 80
         && id
             .bytes()
@@ -373,6 +399,13 @@ pub fn import_scan_items(paths: &AgentHubPaths, items: &[ScanItem]) -> Result<Ve
     let mut imported = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
     for item in items.iter().filter(|i| i.selected) {
+        anyhow::ensure!(
+            item.importable,
+            "{} {} is not importable: {}",
+            item.kind.as_str(),
+            item.path.display(),
+            scan_warning_message(item.warning.as_deref())
+        );
         if !seen.insert((item.kind, item.digest.clone())) {
             continue;
         }
@@ -382,37 +415,47 @@ pub fn import_scan_items(paths: &AgentHubPaths, items: &[ScanItem]) -> Result<Ve
             .and_then(|s| s.to_str())
             .unwrap_or(item.kind.as_str());
         let id = unique_id(paths, item.kind, &slug(base));
-        match item.kind {
-            CapabilityKind::Skill => copy_checked(&item.path, &paths.skills.join(&id))?,
-            CapabilityKind::Plugin => {
-                let dest = paths.plugins.join(&id);
-                let (format, source_manifest, components) = inspect_plugin(&item.path)?;
-                fs::create_dir_all(dest.join("payload"))?;
-                copy_checked(&item.path, &dest.join("payload"))?;
-                let manifest = serde_json::json!({"schemaVersion":1,"id":id,"displayName":base,"sourceFormat":format,"sourceManifest":source_manifest,"components":components});
-                fs::write(
-                    dest.join("agenthub.plugin.json"),
-                    serde_json::to_vec_pretty(&manifest)?,
-                )?;
+        (|| -> Result<()> {
+            match item.kind {
+                CapabilityKind::Skill => copy_checked(&item.path, &paths.skills.join(&id))?,
+                CapabilityKind::Plugin => {
+                    let dest = paths.plugins.join(&id);
+                    let (format, source_manifest, components) = inspect_plugin(&item.path)?;
+                    fs::create_dir_all(dest.join("payload"))?;
+                    copy_checked(&item.path, &dest.join("payload"))?;
+                    let manifest = serde_json::json!({"schemaVersion":1,"id":id,"displayName":base,"sourceFormat":format,"sourceManifest":source_manifest,"components":components});
+                    fs::write(
+                        dest.join("agenthub.plugin.json"),
+                        serde_json::to_vec_pretty(&manifest)?,
+                    )?;
+                }
+                CapabilityKind::Rule => {
+                    let dest = paths.rules.join(&id);
+                    fs::create_dir_all(&dest)?;
+                    let body = if item.path.is_file() {
+                        fs::read(&item.path)?
+                    } else {
+                        Vec::new()
+                    };
+                    fs::write(dest.join("rule.md"), body)?;
+                    fs::write(
+                        dest.join("rule.json"),
+                        serde_json::to_vec_pretty(
+                            &serde_json::json!({"schemaVersion":1,"id":id,"activation":"always","paths":[],"targets":["cursor","codex","claude"]}),
+                        )?,
+                    )?;
+                }
+                CapabilityKind::Mcp => import_mcp(paths, item, &id)?,
             }
-            CapabilityKind::Rule => {
-                let dest = paths.rules.join(&id);
-                fs::create_dir_all(&dest)?;
-                let body = if item.path.is_file() {
-                    fs::read(&item.path)?
-                } else {
-                    Vec::new()
-                };
-                fs::write(dest.join("rule.md"), body)?;
-                fs::write(
-                    dest.join("rule.json"),
-                    serde_json::to_vec_pretty(
-                        &serde_json::json!({"schemaVersion":1,"id":id,"activation":"always","paths":[],"targets":["cursor","codex","claude"]}),
-                    )?,
-                )?;
-            }
-            CapabilityKind::Mcp => import_mcp(paths, item, &id)?,
-        };
+            Ok(())
+        })()
+        .with_context(|| {
+            format!(
+                "import {} from {}",
+                item.kind.as_str(),
+                item.path.display()
+            )
+        })?;
         imported.push(id);
     }
     Ok(imported)
@@ -433,19 +476,49 @@ pub fn import_initial_atomic(paths: &AgentHubPaths, items: &[ScanItem]) -> Resul
     }
     let result = (|| -> Result<Vec<String>> {
         let imported = import_scan_items(&stage, items)?;
-        for (source, target) in [
-            (&stage.skills, &paths.skills),
-            (&stage.plugins, &paths.plugins),
-            (&stage.rules, &paths.rules),
-            (&stage.mcp, &paths.mcp),
-        ] {
-            fs::remove_dir(target)?;
-            fs::rename(source, target)?;
-        }
+        inventory(&stage).context("staged Canonical validation failed")?;
+        replace_canonical_dirs(paths, &stage, &stage_root)?;
         Ok(imported)
     })();
     let _ = fs::remove_dir_all(&stage_root);
     result
+}
+
+fn replace_canonical_dirs(
+    paths: &AgentHubPaths,
+    stage: &AgentHubPaths,
+    stage_root: &Path,
+) -> Result<()> {
+    let originals = stage_root.join("originals");
+    fs::create_dir_all(&originals)?;
+    let pairs = [
+        ("skills", &stage.skills, &paths.skills),
+        ("plugins", &stage.plugins, &paths.plugins),
+        ("rules", &stage.rules, &paths.rules),
+        ("mcp", &stage.mcp, &paths.mcp),
+    ];
+    for (name, _, target) in &pairs {
+        if target.exists() {
+            fs::rename(target, originals.join(name))?;
+        }
+    }
+    let mut moved = Vec::new();
+    for (name, source, target) in &pairs {
+        if let Err(error) = fs::rename(source, target) {
+            for restored_target in moved.iter().rev() {
+                let _ = fs::remove_dir_all(restored_target);
+            }
+            for (original_name, _, original_target) in &pairs {
+                let backup = originals.join(original_name);
+                if backup.exists() {
+                    let _ = fs::rename(backup, original_target);
+                }
+            }
+            return Err(error).with_context(|| format!("activate staged {name}"));
+        }
+        moved.push((*target).clone());
+    }
+    Ok(())
 }
 
 pub fn discard_incomplete_import(paths: &AgentHubPaths) -> Result<()> {
@@ -484,10 +557,24 @@ fn slug(value: &str) -> String {
         })
         .collect();
     let s = s.trim_matches('-').to_string();
-    if s.is_empty() {
-        "imported".into()
+    let s = if s.is_empty() {
+        "imported".to_string()
     } else {
         s
+    };
+    if valid_id(&s) {
+        s
+    } else {
+        format!("{s}-item")
+    }
+}
+
+fn scan_warning_message(code: Option<&str>) -> &'static str {
+    match code {
+        Some("rule_empty") => "rule file is empty",
+        Some("rule_too_large") => "rule file is larger than 1 MB",
+        Some("rule_invalid_encoding") => "rule file must use UTF-8 encoding",
+        _ => "validation failed",
     }
 }
 fn unique_id(paths: &AgentHubPaths, kind: CapabilityKind, base: &str) -> String {
@@ -632,7 +719,7 @@ fn validate_component_paths(value: &serde_json::Value) -> Result<()> {
 }
 fn import_mcp(paths: &AgentHubPaths, item: &ScanItem, id: &str) -> Result<()> {
     let name = item
-        .warning
+        .source_key
         .as_deref()
         .and_then(|v| v.strip_prefix("server:"))
         .unwrap_or(id);

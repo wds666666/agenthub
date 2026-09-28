@@ -9,6 +9,15 @@ use agenthub_core::{
 };
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
+use tauri::Manager;
+
+#[derive(serde::Serialize)]
+struct RuntimeDiagnostics {
+    log_dir: String,
+    canonical_root: String,
+    git_available: bool,
+    platform: &'static str,
+}
 
 static INITIALIZING: AtomicBool = AtomicBool::new(false);
 struct InitGuard;
@@ -36,7 +45,18 @@ fn err(e: impl std::fmt::Display) -> String {
 fn trace(area: &str, event: &str, context: impl std::fmt::Display) {
     let context = agenthub_core::secrets::redact(&context.to_string().replace(['\n', '\r'], " "));
     let context: String = context.chars().take(180).collect();
-    eprintln!("[agenthub][{area}] {event} {context}");
+    log::info!("[agenthub][{area}] {event} {context}");
+}
+
+#[tauri::command]
+fn runtime_diagnostics(app: tauri::AppHandle) -> Result<RuntimeDiagnostics, String> {
+    let h = hub()?;
+    Ok(RuntimeDiagnostics {
+        log_dir: app.path().app_log_dir().map_err(err)?.display().to_string(),
+        canonical_root: h.paths.root.display().to_string(),
+        git_available: git::available(),
+        platform: std::env::consts::OS,
+    })
 }
 
 #[tauri::command]
@@ -76,7 +96,11 @@ fn dashboard() -> Result<Dashboard, String> {
         inventory: counts,
         enabled_targets: h.store.enabled_targets().map_err(err)?,
         auto_sync_targets,
-        dirty: git::snapshot(&h.paths.root).map_err(err)?.dirty,
+        dirty: if initialized {
+            git::snapshot(&h.paths.root).map_err(err)?.dirty
+        } else {
+            false
+        },
         recent_transactions: h.store.recent_transactions(5).map_err(err)?,
     })
 }
@@ -147,7 +171,18 @@ fn initial_scan() -> Result<Vec<ScanItem>, String> {
     {
         return Err("incomplete Canonical import exists; discard it before retrying".into());
     }
-    scanner::scan_global(&h.paths, &Target::ALL).map_err(err)
+    let items = scanner::scan_global(&h.paths, &Target::ALL).map_err(err)?;
+    trace(
+        "init",
+        "scan_complete",
+        format_args!(
+            "found={} importable={} rejected={}",
+            items.len(),
+            items.iter().filter(|item| item.importable).count(),
+            items.iter().filter(|item| !item.importable).count()
+        ),
+    );
+    Ok(items)
 }
 #[tauri::command]
 fn finish_init(selected_ids: Vec<String>) -> Result<Vec<String>, String> {
@@ -156,6 +191,14 @@ fn finish_init(selected_ids: Vec<String>) -> Result<Vec<String>, String> {
     if h.store.initialized().map_err(err)? {
         return Err("AgentHub is already initialized".into());
     }
+    if !git::available() {
+        return Err("Git is required to initialize AgentHub; install Git and retry".into());
+    }
+    trace(
+        "init",
+        "import_start",
+        format_args!("selected={}", selected_ids.len()),
+    );
     let selected: std::collections::BTreeSet<_> = selected_ids.into_iter().collect();
     let mut items = scanner::scan_global(&h.paths, &Target::ALL).map_err(err)?;
     for item in &mut items {
@@ -165,9 +208,17 @@ fn finish_init(selected_ids: Vec<String>) -> Result<Vec<String>, String> {
     if matched != selected.len() {
         return Err("scan result changed; scan again before importing".into());
     }
-    let ids = canonical::import_initial_atomic(&h.paths, &items).map_err(err)?;
-    h.store.set_initialized(true).map_err(err)?;
+    let ids = canonical::import_initial_atomic(&h.paths, &items).map_err(|error| {
+        trace("init", "import_failed", err(&error));
+        err(error)
+    })?;
     git::ensure_repo(&h.paths.root).map_err(err)?;
+    h.store.set_initialized(true).map_err(err)?;
+    trace(
+        "init",
+        "import_complete",
+        format_args!("imported={}", ids.len()),
+    );
     Ok(ids)
 }
 #[tauri::command]
@@ -178,6 +229,30 @@ fn discard_incomplete_init() -> Result<(), String> {
         return Err("cannot discard a completed initialization".into());
     }
     canonical::discard_incomplete_import(&h.paths).map_err(err)
+}
+
+#[tauri::command]
+fn reset_failed_initialization() -> Result<(), String> {
+    let _guard = InitGuard::acquire()?;
+    let h = hub()?;
+    if !h.store.initialized().map_err(err)? {
+        return Err("AgentHub initialization is not marked complete".into());
+    }
+    let validation_error = match canonical::inventory(&h.paths) {
+        Ok(_) => {
+            return Err("Canonical is valid; refusing to reset a completed initialization".into())
+        }
+        Err(error) => error,
+    };
+    let snapshot = git::snapshot(&h.paths.root).map_err(err)?;
+    if snapshot.head.is_some() {
+        return Err("Canonical has committed history; refusing automatic reset".into());
+    }
+    trace("init", "legacy_reset_start", err(&validation_error));
+    canonical::discard_incomplete_import(&h.paths).map_err(err)?;
+    h.store.set_initialized(false).map_err(err)?;
+    trace("init", "legacy_reset_complete", "canonical_copies_removed");
+    Ok(())
 }
 #[tauri::command]
 fn set_target(target: Target, enabled: bool) -> Result<(), String> {
@@ -334,8 +409,35 @@ fn git_commit(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .clear_targets()
+                .target(tauri_plugin_log::Target::new(
+                    tauri_plugin_log::TargetKind::LogDir {
+                        file_name: Some("agenthub-desktop".into()),
+                    },
+                ))
+                .max_file_size(5_000_000)
+                .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(4))
+                .level(log::LevelFilter::Info)
+                .build(),
+        )
+        .setup(|_| {
+            std::panic::set_hook(Box::new(|panic_info| {
+                log::error!(
+                    "desktop panic: {}",
+                    agenthub_core::secrets::redact(&panic_info.to_string())
+                );
+            }));
+            log::info!(
+                "AgentHub desktop started version={}",
+                env!("CARGO_PKG_VERSION")
+            );
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             dashboard,
+            runtime_diagnostics,
             debug_event,
             inventory,
             capability_detail,
@@ -344,6 +446,7 @@ pub fn run() {
             initial_scan,
             finish_init,
             discard_incomplete_init,
+            reset_failed_initialization,
             set_target,
             create_plan,
             apply_plan,

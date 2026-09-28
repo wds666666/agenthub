@@ -78,6 +78,52 @@ fn scanner_is_strictly_user_global() {
 }
 
 #[test]
+fn scanner_reports_invalid_rules_without_allowing_import() {
+    let (temp, hub) = fixture();
+    let rules = temp.path().join(".claude/rules");
+    fs::create_dir_all(&rules).unwrap();
+    fs::write(rules.join("empty.md"), "  \r\n").unwrap();
+    fs::write(rules.join("binary.md"), [0xff, 0xfe]).unwrap();
+    fs::write(rules.join("valid.md"), "# Valid\r\nKeep this rule.").unwrap();
+
+    let found = scanner::scan_global(&hub.paths, &[Target::Claude]).unwrap();
+    assert_eq!(found.len(), 3);
+    let empty = found
+        .iter()
+        .find(|item| item.path.ends_with("empty.md"))
+        .unwrap();
+    assert!(!empty.importable);
+    assert_eq!(empty.warning.as_deref(), Some("rule_empty"));
+    let binary = found
+        .iter()
+        .find(|item| item.path.ends_with("binary.md"))
+        .unwrap();
+    assert!(!binary.importable);
+    assert_eq!(binary.warning.as_deref(), Some("rule_invalid_encoding"));
+    assert!(
+        found
+            .iter()
+            .find(|item| item.path.ends_with("valid.md"))
+            .unwrap()
+            .importable
+    );
+
+    let mut selected = empty.clone();
+    selected.selected = true;
+    assert!(canonical::import_initial_atomic(&hub.paths, &[selected]).is_err());
+    assert!(canonical::canonical_dirs_empty(&hub.paths).unwrap());
+}
+
+#[test]
+fn canonical_ids_are_portable_to_windows() {
+    assert!(!canonical::valid_id("con"));
+    assert!(!canonical::valid_id("nul"));
+    assert!(!canonical::valid_id("com1"));
+    assert!(!canonical::valid_id("lpt9"));
+    assert!(canonical::valid_id("console"));
+}
+
+#[test]
 fn plan_is_read_only_and_apply_preserves_unrelated_mcp_settings() {
     let (_temp, hub) = fixture();
     seed(&hub);
@@ -255,6 +301,8 @@ fn plugin_import_rejects_unknown_components_and_traversal() {
         path: path.to_path_buf(),
         digest: "digest".into(),
         selected: true,
+        importable: true,
+        source_key: None,
         warning: None,
     };
     fs::write(
