@@ -147,6 +147,11 @@ fn plan_is_read_only_and_apply_preserves_unrelated_mcp_settings() {
     assert_eq!(skills.create, 1);
     assert_eq!(skills.delete, 1);
     assert_eq!(skills.files, 2);
+    assert!(plan.steps.iter().any(|step| {
+        step.capability_kind == Some(CapabilityKind::Skill)
+            && step.capability_id.as_deref() == Some("host-only")
+            && step.action == agenthub_core::models::PlanAction::Delete
+    }));
     hub.store.save_plan(&plan).unwrap();
     let tx = transaction::apply(&hub.paths, &hub.store, &plan).unwrap();
     assert_eq!(tx.status, "applied");
@@ -438,6 +443,38 @@ fn automatic_sync_profiles_run_after_mutation_and_skip_noop_transactions() {
     assert!(!no_change[0].changed);
     assert!(no_change[0].transaction_id.is_none());
     assert_eq!(hub.store.recent_transactions(10).unwrap().len(), 2);
+}
+
+#[test]
+fn deleting_canonical_capability_runs_saved_auto_sync_scope() {
+    let (_temp, hub) = fixture();
+    seed(&hub);
+    let selection = SyncSelection {
+        skills: vec!["review".into()],
+        plugins: Vec::new(),
+        mcp: Vec::new(),
+        rules: false,
+    };
+    transaction::sync_once(&hub.paths, &hub.store, Target::Cursor, Some(&selection)).unwrap();
+    hub.store
+        .set_auto_sync_profile(&agenthub_core::models::AutoSyncProfile {
+            target: Target::Cursor,
+            enabled: true,
+            selection,
+        })
+        .unwrap();
+
+    canonical::delete_capability(&hub.paths, CapabilityKind::Skill, "review").unwrap();
+    let outcomes = transaction::run_auto_sync(&hub.paths, &hub.store).unwrap();
+
+    assert_eq!(outcomes.len(), 1);
+    assert!(outcomes[0].changed);
+    assert!(outcomes[0].error.is_none());
+    assert!(!hub.paths.user_home.join(".cursor/skills/review").exists());
+    assert!(canonical::inventory(&hub.paths)
+        .unwrap()
+        .iter()
+        .all(|capability| capability.id != "review"));
 }
 
 #[test]

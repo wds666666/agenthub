@@ -14,9 +14,13 @@ If an automatic run has no steps, it returns `changed=false` without persisting 
 
 A Plan records Canonical digest, Git HEAD, dirty state, target, selected Skills/Plugins/MCP IDs, the Rules toggle, expected projection digest, warnings and ordered file steps. Steps classify create, update, replace, delete, skip and constraint. Secrets are redacted before persistence, logs or JSON output. Apply re-generates the same selected projection and blocks if the selection or any other Plan input has drifted.
 
+Plan presentation must expose a capability-level change list before raw file details. For Skills, Plugins and individually projected Rules this names the exact Canonical or host capability ID and whether it will be created, replaced or deleted, with the affected file count. Combined host documents such as an MCP collection may be labeled as a writable-domain replacement when the adapter cannot safely attribute a file diff to one server. Raw paths remain a secondary expandable diagnostic view.
+
 ## Explicit sync scope
 
 Target Sync begins with a scope selector. Skills, Plugins and MCP servers are selected by Canonical ID; Rules are selected with a target-wide toggle because some adapters render them as a combined file or plugin. A selected domain is replaced from its selected Canonical subset, so host extras in that domain appear as deletes. A domain with no selected resources is omitted from the projection and is not touched. Rules disabled omits the Rules projection entirely. The selection snapshot is persisted in the Plan and is part of the Apply contract.
+
+The automatic-sync profile uses the same visible selector. The UI shows the saved target scope and requires the user to review named Skills, Plugins, MCP servers and the Rules toggle when enabling or changing it; automatic sync is never represented as an opaque all-capabilities switch.
 
 ## Target domains
 

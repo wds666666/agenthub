@@ -33,6 +33,7 @@ import {
   Shuffle,
   Sparkles,
   TerminalSquare,
+  Trash2,
   Upload,
   UserRound,
 } from "lucide-react";
@@ -261,6 +262,8 @@ function Inventory({ onChanged, onNotify }: { onChanged: () => void; onNotify: (
   const [loadingRule, setLoadingRule] = useState(false);
   const [detail, setDetail] = useState<CapabilityDetail | null>(null);
   const [loadingDetail, setLoadingDetail] = useState("");
+  const [deleteCandidate, setDeleteCandidate] = useState<Capability | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const loadInventory = useCallback(() => { api.inventory().then(setItems).catch(() => setItems([])); }, []);
   useEffect(loadInventory, [loadInventory]);
@@ -311,6 +314,17 @@ function Inventory({ onChanged, onNotify }: { onChanged: () => void; onNotify: (
     else if (changed.length) onNotify(`${t("toast.ruleSavedAutoSynced")} ${changed.map((outcome) => t(`targets.${outcome.target}`)).join("、")}`);
     else onNotify(t("toast.ruleSaved"));
   };
+  const removeCapability = async () => {
+    if (!deleteCandidate) return;
+    setDeleting(true); setLoadError("");
+    try {
+      const result = await api.deleteCapability(deleteCandidate.kind, deleteCandidate.id);
+      setDeleteCandidate(null); setDetail(null); loadInventory(); onChanged();
+      const failed = result.auto_sync.filter((outcome) => outcome.error);
+      onNotify(failed.length ? `${t("toast.capabilityDeletedAutoFailed")} ${failed.map((outcome) => t(`targets.${outcome.target}`)).join("、")}` : t("toast.capabilityDeleted"));
+    } catch (value) { setLoadError(String(value)); }
+    finally { setDeleting(false); }
+  };
 
   return (
     <>
@@ -354,6 +368,9 @@ function Inventory({ onChanged, onNotify }: { onChanged: () => void; onNotify: (
                         <Pencil size={15} />
                       </button>
                     )}
+                    <button className="capability-delete" type="button" disabled={deleting} onClick={() => setDeleteCandidate(item)} aria-label={`${t("inventory.delete")} ${item.display_name}`}>
+                      <Trash2 size={15} />
+                    </button>
                   </article>
                 ))}
                 {!group.length && <EmptyState icon={KindIcon} title={t("inventory.empty")} body={t("inventory.emptyHint")} compact />}
@@ -363,12 +380,16 @@ function Inventory({ onChanged, onNotify }: { onChanged: () => void; onNotify: (
         })}
       </div>
       {editor && <RuleEditor key={`${editor.create ? "new" : "edit"}-${editor.document.id}`} initial={editor.document} create={editor.create} imported={editor.imported} onClose={() => setEditor(null)} onSaved={saved} />}
-      {detail && <CapabilityDetailDialog detail={detail} onClose={() => setDetail(null)} onEditRule={detail.capability.kind === "rule" ? () => { const id = detail.capability.id; setDetail(null); void editRule(id); } : undefined} />}
+      {detail && <CapabilityDetailDialog detail={detail} onClose={() => setDetail(null)} onDelete={() => setDeleteCandidate(detail.capability)} onEditRule={detail.capability.kind === "rule" ? () => { const id = detail.capability.id; setDetail(null); void editRule(id); } : undefined} />}
+      <Dialog open={Boolean(deleteCandidate)} onClose={() => !deleting && setDeleteCandidate(null)} title={t("inventory.deleteTitle")} actions={<><Button variant="secondary" disabled={deleting} onClick={() => setDeleteCandidate(null)}>{t("common.cancel")}</Button><Button variant="danger" disabled={deleting} onClick={() => void removeCapability()}>{deleting ? <RefreshCw className="spin" size={16} /> : <Trash2 size={16} />}{t("inventory.deleteAction")}</Button></>}>
+        <p>{t("inventory.deleteBody")}</p>
+        <div className="delete-capability-preview"><span className="target-tab__mark">{deleteCandidate ? kindMeta.find((kind) => kind.id === deleteCandidate.kind)?.id.slice(0, 2).toUpperCase() : ""}</span><span><strong>{deleteCandidate?.display_name}</strong><code>{deleteCandidate?.id}</code></span></div>
+      </Dialog>
     </>
   );
 }
 
-function CapabilityDetailDialog({ detail, onClose, onEditRule }: { detail: CapabilityDetail; onClose: () => void; onEditRule?: () => void }) {
+function CapabilityDetailDialog({ detail, onClose, onEditRule, onDelete }: { detail: CapabilityDetail; onClose: () => void; onEditRule?: () => void; onDelete: () => void }) {
   const meta = kindMeta.find((item) => item.id === detail.capability.kind) ?? kindMeta[0];
   const DetailIcon = meta.icon;
   const bytes = (size: number) => size < 1024 ? `${size} B` : `${(size / 1024).toFixed(size < 10_240 ? 1 : 0)} KB`;
@@ -378,7 +399,7 @@ function CapabilityDetailDialog({ detail, onClose, onEditRule }: { detail: Capab
       wide
       onClose={onClose}
       title={detail.capability.display_name}
-      actions={<>{onEditRule && <Button variant="secondary" onClick={onEditRule}><Pencil size={15} />{t("inventory.editRule")}</Button>}<Button onClick={onClose}>{t("common.close")}</Button></>}
+      actions={<><Button variant="danger" onClick={onDelete}><Trash2 size={15} />{t("inventory.delete")}</Button>{onEditRule && <Button variant="secondary" onClick={onEditRule}><Pencil size={15} />{t("inventory.editRule")}</Button>}<Button onClick={onClose}>{t("common.close")}</Button></>}
     >
       <div className="capability-detail__identity">
         <span className={`inventory-card__icon inventory-card__icon--${meta.accent}`}><DetailIcon size={21} /></span>
@@ -489,6 +510,23 @@ function Sync({ onApplied, onNotify }: { onApplied: () => void; onNotify: (messa
     ...kind,
     summary: plan?.summary?.find((item) => item.kind === kind.id) ?? { kind: kind.id, affected: 0, create: 0, update: 0, delete: 0, skip: 0, files: 0 },
   })), [plan]);
+  const planCapabilityChanges = useMemo(() => {
+    const changes = new Map<string, { kind: Kind; id: string; action: string; files: number }>();
+    for (const step of plan?.steps ?? []) {
+      if (!step.capability_kind) continue;
+      const id = step.capability_id && step.capability_id !== "__projection__" ? step.capability_id : t("sync.domainProjection");
+      const key = `${step.capability_kind}:${id}`;
+      const existing = changes.get(key);
+      const action = step.action === "update" ? "replace" : step.action;
+      if (existing) {
+        existing.files += 1;
+        if (existing.action !== action) existing.action = "replace";
+      } else {
+        changes.set(key, { kind: step.capability_kind, id, action, files: 1 });
+      }
+    }
+    return [...changes.values()].sort((left, right) => `${left.kind}:${left.id}`.localeCompare(`${right.kind}:${right.id}`));
+  }, [plan]);
   const affectedCapabilities = planSummary.reduce((sum, item) => sum + item.summary.affected, 0);
   useEffect(() => {
     Promise.all([api.inventory(), api.autoSyncProfiles()]).then(([items, nextProfiles]) => {
@@ -503,6 +541,7 @@ function Sync({ onApplied, onNotify }: { onApplied: () => void; onNotify: (messa
   const scopeChanged = autoEnabled && !sameSelection(selection, currentProfile?.selection);
   const selectionItems = useMemo(() => inventory.filter((item) => `${item.id} ${item.display_name}`.toLowerCase().includes(selectionQuery.toLowerCase())), [inventory, selectionQuery]);
   const selectedCount = selection ? selection.skills.length + selection.plugins.length + selection.mcp.length + (selection.rules ? inventory.filter((item) => item.kind === "rule").length : 0) : 0;
+  const profileSelectionCount = (profile?: AutoSyncProfile) => profile ? profile.selection.skills.length + profile.selection.plugins.length + profile.selection.mcp.length + (profile.selection.rules ? inventory.filter((item) => item.kind === "rule").length : 0) : 0;
   const toggleCapability = (item: Capability) => {
     if (!selection) return;
     const key = item.kind === "skill" ? "skills" : item.kind === "plugin" ? "plugins" : "mcp";
@@ -582,7 +621,7 @@ function Sync({ onApplied, onNotify }: { onApplied: () => void; onNotify: (messa
                 key={item.id}
               >
                 <span className="target-tab__mark">{item.mark}</span>
-                <span><strong>{t(`targets.${item.id}`)}</strong><small className={profiles.find((profile) => profile.target === item.id)?.enabled ? "is-auto" : undefined}>{profiles.find((profile) => profile.target === item.id)?.enabled ? t("sync.autoOn") : item.description}</small></span>
+                <span><strong>{t(`targets.${item.id}`)}</strong><small className={profiles.find((profile) => profile.target === item.id)?.enabled ? "is-auto" : undefined}>{profiles.find((profile) => profile.target === item.id)?.enabled ? `${t("sync.autoOn")} · ${profileSelectionCount(profiles.find((profile) => profile.target === item.id))} ${t("sync.selected")}` : item.description}</small></span>
                 <span className="target-tab__radio"><CheckCircle2 size={18} /></span>
               </button>
             ))}
@@ -599,6 +638,7 @@ function Sync({ onApplied, onNotify }: { onApplied: () => void; onNotify: (messa
             <Button variant="quiet" disabled={!selection} onClick={() => selection && setSelection({ ...selection, skills: inventory.filter((item) => item.kind === "skill").map((item) => item.id), plugins: inventory.filter((item) => item.kind === "plugin").map((item) => item.id), mcp: inventory.filter((item) => item.kind === "mcp").map((item) => item.id), rules: inventory.some((item) => item.kind === "rule") })}>{t("sync.selectAll")}</Button>
             <Button variant="quiet" disabled={!selection} onClick={() => selection && setSelection({ ...selection, skills: [], plugins: [], mcp: [], rules: false })}>{t("sync.clearAll")}</Button>
           </div>
+          <p className="scope-impact-note"><ShieldCheck size={15} />{t("sync.scopeDeleteHint")}</p>
           <div className="sync-selection__groups">
             {(["skill", "plugin", "mcp"] as const).map((kind) => {
               const items = selectionItems.filter((item) => item.kind === kind);
@@ -652,6 +692,18 @@ function Sync({ onApplied, onNotify }: { onApplied: () => void; onNotify: (messa
                   </article>
                 ))}
               </div>
+              {planCapabilityChanges.length > 0 && (
+                <section className="plan-resource-changes">
+                  <header><div><p className="eyebrow">CAPABILITY DIFF</p><h3>{t("sync.exactChanges")}</h3></div><StatusBadge tone="warning">{planCapabilityChanges.length} {t("sync.capabilityChanges")}</StatusBadge></header>
+                  <div>
+                    {kindMeta.map(({ id: kind, icon: ChangeIcon }) => {
+                      const changes = planCapabilityChanges.filter((change) => change.kind === kind);
+                      if (!changes.length) return null;
+                      return <section className="plan-resource-group" key={kind}><h4><ChangeIcon size={15} />{t(`kinds.${kind}`)}<span>{changes.length}</span></h4><div>{changes.map((change) => { const capability = inventory.find((item) => item.kind === kind && item.id === change.id); return <article key={`${kind}:${change.id}`}><span className={`action-mark action-mark--${change.action}`}>{t(`sync.${change.action === "replace" ? "update" : change.action}`)}</span><span><strong>{capability?.display_name ?? change.id}</strong>{capability && capability.display_name !== change.id && <code>{change.id}</code>}</span><small>{change.files} {t("sync.files")}</small></article>; })}</div></section>;
+                    })}
+                  </div>
+                </section>
+              )}
               {plan.steps.length > 0 && (
                 <details className="plan-files">
                   <summary><span>{t("sync.fileDetails")}</span><strong>{plan.steps.length} {t("sync.files")}</strong></summary>
@@ -681,6 +733,7 @@ function Sync({ onApplied, onNotify }: { onApplied: () => void; onNotify: (messa
       >
         <p>{t(confirm === "enable_auto" ? "sync.autoConfirmBody" : confirm === "disable_auto" ? "sync.disableAutoBody" : "sync.confirmBody")}</p>
         <div className="rollback-target"><span className="target-tab__mark">{targetMeta.find((item) => item.id === target)?.mark}</span><span><strong>{t(`targets.${target}`)}</strong><small>{selectedCount} {t("sync.selected")}</small></span></div>
+        {confirm === "enable_auto" && selection && <div className="auto-scope-review">{(["skill", "plugin", "mcp", "rule"] as Kind[]).map((kind) => { const ids = kind === "skill" ? selection.skills : kind === "plugin" ? selection.plugins : kind === "mcp" ? selection.mcp : selection.rules ? inventory.filter((item) => item.kind === "rule").map((item) => item.id) : []; return <section key={kind}><strong>{t(`kinds.${kind}`)}</strong><span>{ids.length ? ids.map((id) => inventory.find((item) => item.kind === kind && item.id === id)?.display_name ?? id).join("、") : t("sync.noneSelected")}</span></section>; })}</div>}
         {confirm === "reviewed" && <code className="dialog-code">{plan?.id}</code>}
       </Dialog>
     </>
@@ -879,7 +932,11 @@ function Init({ onDone }: { onDone: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [recover, setRecover] = useState(false);
+  const [scanKind, setScanKind] = useState<Kind>("skill");
   const importableItems = items?.filter((item) => item.importable) ?? [];
+  const visibleScanItems = items?.filter((item) => item.kind === scanKind) ?? [];
+  const visibleImportableItems = visibleScanItems.filter((item) => item.importable);
+  const visibleSelectedCount = visibleImportableItems.filter((item) => selected.has(item.id)).length;
 
   const scan = async () => {
     setBusy(true); setError("");
@@ -926,15 +983,33 @@ function Init({ onDone }: { onDone: () => void }) {
               <div><h2>{t("init.found")}</h2><small>{selected.size} {t("init.selected")} · {importableItems.length} {t("init.importable")} · {items.length - importableItems.length} {t("init.rejected")}</small></div>
               <div><Button variant="quiet" disabled={busy || selected.size === importableItems.length} onClick={() => setSelected(new Set(importableItems.map((item) => item.id)))}>{t("init.selectAll")}</Button><Button variant="quiet" disabled={busy || selected.size === 0} onClick={() => setSelected(new Set())}>{t("init.clear")}</Button></div>
             </header>
+            <div className="scan-kind-tabs" role="tablist" aria-label={t("init.groups")}>
+              {kindMeta.map(({ id, icon: KindIcon }) => {
+                const group = items.filter((item) => item.kind === id);
+                const groupSelected = group.filter((item) => item.importable && selected.has(item.id)).length;
+                return (
+                  <button type="button" role="tab" aria-selected={scanKind === id} className={scanKind === id ? "is-selected" : ""} onClick={() => setScanKind(id)} key={id}>
+                    <KindIcon size={17} /><span><strong>{t(`kinds.${id}`)}</strong><small>{groupSelected} / {group.filter((item) => item.importable).length}</small></span>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="scan-group-toolbar">
+              <span>{t(`kinds.${scanKind}`)} · {visibleScanItems.length} {t("init.discovered")}</span>
+              <Button variant="quiet" disabled={busy || visibleImportableItems.length === 0} onClick={() => setSelected((current) => { const next = new Set(current); if (visibleSelectedCount === visibleImportableItems.length) visibleImportableItems.forEach((item) => next.delete(item.id)); else visibleImportableItems.forEach((item) => next.add(item.id)); return next; })}>{visibleSelectedCount === visibleImportableItems.length && visibleImportableItems.length > 0 ? t("init.clearGroup") : t("init.selectGroup")}</Button>
+            </div>
             <div className="scan-list">
               {!items.length && <EmptyState icon={Boxes} title={t("inventory.empty")} body={t("init.none")} />}
-              {items.map((item) => {
+              {items.length > 0 && visibleScanItems.length === 0 && <EmptyState icon={kindMeta.find((kind) => kind.id === scanKind)?.icon ?? Boxes} title={t("init.emptyGroup")} body={t("init.emptyGroupHint")} compact />}
+              {visibleScanItems.map((item) => {
                 const checked = selected.has(item.id);
+                const displayName = item.source_key?.replace(/^server:/, "") ?? item.path.split(/[\\/]/).pop();
+                const duplicate = items.some((candidate) => candidate.id !== item.id && candidate.kind === item.kind && candidate.digest === item.digest);
                 return (
                   <label className={`${checked ? "is-selected" : ""} ${!item.importable ? "is-disabled" : ""}`} key={item.id}>
                     <input type="checkbox" disabled={busy || !item.importable} checked={checked} onChange={() => setSelected((old) => { const next = new Set(old); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next; })} />
                     <span className="scan-check">{item.importable ? <CheckCircle2 size={17} /> : <AlertTriangle size={15} />}</span>
-                    <span className="scan-copy"><strong>{item.path.split(/[\\/]/).pop()}</strong><small>{item.source} · {item.kind}</small>{item.warning && <em>{t(`init.${item.warning}`)}</em>}</span>
+                    <span className="scan-copy"><strong title={displayName}>{displayName}</strong><small><b>{item.source}</b><span>{item.path}</span></small>{item.warning && <em>{t(`init.${item.warning}`)}</em>}{duplicate && !item.warning && <em>{t("init.duplicate")}</em>}</span>
                     <code>{item.importable ? item.digest.slice(0, 8) : t("init.notImportable")}</code>
                   </label>
                 );

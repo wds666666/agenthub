@@ -255,6 +255,13 @@ pub struct CapabilityMutationResult {
     pub auto_sync: Vec<AutoSyncOutcome>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CapabilityDeleteResult {
+    pub id: String,
+    pub kind: CapabilityKind,
+    pub auto_sync: Vec<AutoSyncOutcome>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Dashboard {
     pub initialized: bool,

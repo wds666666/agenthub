@@ -16,6 +16,7 @@ export interface AutoSyncProfile { target: Target; enabled: boolean; selection: 
 export interface AutoSyncOutcome { target: Target; changed: boolean; transaction_id?: string; error?: string }
 export interface AutoSyncUpdateResult { profile: AutoSyncProfile; initial_sync?: SyncRunResult }
 export interface CapabilityMutationResult { capability: Capability; auto_sync: AutoSyncOutcome[] }
+export interface CapabilityDeleteResult { id: string; kind: Kind; auto_sync: AutoSyncOutcome[] }
 export interface Plan { id: string; target: Target; steps: PlanStep[]; summary: PlanCapabilitySummary[]; selection?: SyncSelection; warnings: string[]; canonical_digest: string; git: { head?: string; dirty: boolean } }
 export interface RuleDocument { schemaVersion: number; id: string; displayName: string; activation: "always" | "manual" | "paths"; paths: string[]; targets: Target[]; body: string }
 export interface GitIdentity { name?: string; email?: string }
@@ -29,6 +30,7 @@ export const api = {
   capabilityDetail: (kind: Kind, id: string) => call<CapabilityDetail>("capability_detail", { kind, id }),
   readRule: (id: string) => call<RuleDocument>("read_rule", { id }),
   saveRule: (rule: RuleDocument, create: boolean) => call<CapabilityMutationResult>("save_rule", { rule, create }),
+  deleteCapability: (kind: Kind, id: string) => call<CapabilityDeleteResult>("delete_capability", { kind, id }),
   scan: () => call<ScanItem[]>("initial_scan"),
   finishInit: (selectedIds: string[]) => call<string[]>("finish_init", { selectedIds }),
   discardIncompleteInit: () => call<void>("discard_incomplete_init"),

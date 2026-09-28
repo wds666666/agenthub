@@ -155,6 +155,21 @@ pub fn read_capability_detail(
     })
 }
 
+pub fn delete_capability(paths: &AgentHubPaths, kind: CapabilityKind, id: &str) -> Result<()> {
+    anyhow::ensure!(valid_id(id), "invalid capability id");
+    let root = match kind {
+        CapabilityKind::Skill => &paths.skills,
+        CapabilityKind::Mcp => &paths.mcp,
+        CapabilityKind::Plugin => &paths.plugins,
+        CapabilityKind::Rule => &paths.rules,
+    };
+    let target = root.join(id);
+    anyhow::ensure!(target.is_dir(), "capability not found");
+    paths.assert_inside_root(&target)?;
+    fs::remove_dir_all(target)?;
+    Ok(())
+}
+
 fn redact_json_preview(preview: &str) -> String {
     fn visit(value: &mut serde_json::Value) {
         match value {

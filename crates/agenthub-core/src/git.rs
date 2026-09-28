@@ -2,15 +2,30 @@ use crate::models::{GitIdentity, GitSnapshot};
 use anyhow::{Context, Result};
 use std::{path::Path, process::Command};
 
+fn command(program: &str) -> Command {
+    let mut command = Command::new(program);
+    command
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_PAGER", "cat")
+        .env("GCM_INTERACTIVE", "Never");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command
+}
+
 pub fn available() -> bool {
-    Command::new("git")
+    command("git")
         .arg("--version")
         .output()
         .is_ok_and(|output| output.status.success())
 }
 
 fn run(root: &Path, args: &[&str]) -> Result<String> {
-    let out = Command::new("git")
+    let out = command("git")
         .arg("-C")
         .arg(root)
         .args(args)

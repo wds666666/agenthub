@@ -1,9 +1,9 @@
 use agenthub_core::{
     canonical, git,
     models::{
-        AutoSyncProfile, AutoSyncUpdateResult, CapabilityDetail, CapabilityKind,
-        CapabilityMutationResult, Dashboard, GitIdentity, Plan, RuleDocument, ScanItem,
-        SyncSelection, Target, Transaction,
+        AutoSyncProfile, AutoSyncUpdateResult, CapabilityDeleteResult, CapabilityDetail,
+        CapabilityKind, CapabilityMutationResult, Dashboard, GitIdentity, Plan, RuleDocument,
+        ScanItem, SyncSelection, Target, Transaction,
     },
     planner, scanner, transaction, AgentHub,
 };
@@ -48,7 +48,7 @@ fn trace(area: &str, event: &str, context: impl std::fmt::Display) {
     log::info!("[agenthub][{area}] {event} {context}");
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn runtime_diagnostics(app: tauri::AppHandle) -> Result<RuntimeDiagnostics, String> {
     let h = hub()?;
     Ok(RuntimeDiagnostics {
@@ -73,7 +73,7 @@ fn debug_event(event: String, context: Option<String>) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn dashboard() -> Result<Dashboard, String> {
     let h = hub()?;
     let initialized = h.store.initialized().map_err(err)?;
@@ -104,17 +104,17 @@ fn dashboard() -> Result<Dashboard, String> {
         recent_transactions: h.store.recent_transactions(5).map_err(err)?,
     })
 }
-#[tauri::command]
+#[tauri::command(async)]
 fn inventory() -> Result<Vec<agenthub_core::models::Capability>, String> {
     let h = hub()?;
     canonical::inventory(&h.paths).map_err(err)
 }
-#[tauri::command]
+#[tauri::command(async)]
 fn capability_detail(kind: CapabilityKind, id: String) -> Result<CapabilityDetail, String> {
     let h = hub()?;
     canonical::read_capability_detail(&h.paths, kind, &id).map_err(err)
 }
-#[tauri::command]
+#[tauri::command(async)]
 fn read_rule(id: String) -> Result<RuleDocument, String> {
     let h = hub()?;
     if !h.store.initialized().map_err(err)? {
@@ -122,7 +122,7 @@ fn read_rule(id: String) -> Result<RuleDocument, String> {
     }
     canonical::read_rule(&h.paths, &id).map_err(err)
 }
-#[tauri::command]
+#[tauri::command(async)]
 fn save_rule(rule: RuleDocument, create: bool) -> Result<CapabilityMutationResult, String> {
     trace(
         "rules",
@@ -163,7 +163,33 @@ fn save_rule(rule: RuleDocument, create: bool) -> Result<CapabilityMutationResul
         auto_sync,
     })
 }
-#[tauri::command]
+
+#[tauri::command(async)]
+fn delete_capability(kind: CapabilityKind, id: String) -> Result<CapabilityDeleteResult, String> {
+    trace(
+        "inventory",
+        "delete_start",
+        format_args!("kind={} id={id}", kind.as_str()),
+    );
+    let h = hub()?;
+    if !h.store.initialized().map_err(err)? {
+        return Err("AgentHub must be initialized before deleting capabilities".into());
+    }
+    canonical::delete_capability(&h.paths, kind, &id).map_err(err)?;
+    let auto_sync = transaction::run_auto_sync(&h.paths, &h.store).map_err(err)?;
+    trace(
+        "inventory",
+        "delete_complete",
+        format_args!("kind={} id={id} targets={}", kind.as_str(), auto_sync.len()),
+    );
+    Ok(CapabilityDeleteResult {
+        id,
+        kind,
+        auto_sync,
+    })
+}
+
+#[tauri::command(async)]
 fn initial_scan() -> Result<Vec<ScanItem>, String> {
     let h = hub()?;
     if !h.store.initialized().map_err(err)?
@@ -184,7 +210,7 @@ fn initial_scan() -> Result<Vec<ScanItem>, String> {
     );
     Ok(items)
 }
-#[tauri::command]
+#[tauri::command(async)]
 fn finish_init(selected_ids: Vec<String>) -> Result<Vec<String>, String> {
     let _guard = InitGuard::acquire()?;
     let h = hub()?;
@@ -221,7 +247,7 @@ fn finish_init(selected_ids: Vec<String>) -> Result<Vec<String>, String> {
     );
     Ok(ids)
 }
-#[tauri::command]
+#[tauri::command(async)]
 fn discard_incomplete_init() -> Result<(), String> {
     let _guard = InitGuard::acquire()?;
     let h = hub()?;
@@ -231,7 +257,7 @@ fn discard_incomplete_init() -> Result<(), String> {
     canonical::discard_incomplete_import(&h.paths).map_err(err)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn reset_failed_initialization() -> Result<(), String> {
     let _guard = InitGuard::acquire()?;
     let h = hub()?;
@@ -254,12 +280,12 @@ fn reset_failed_initialization() -> Result<(), String> {
     trace("init", "legacy_reset_complete", "canonical_copies_removed");
     Ok(())
 }
-#[tauri::command]
+#[tauri::command(async)]
 fn set_target(target: Target, enabled: bool) -> Result<(), String> {
     let h = hub()?;
     h.store.set_target(target, enabled).map_err(err)
 }
-#[tauri::command]
+#[tauri::command(async)]
 fn create_plan(target: Target, selection: Option<SyncSelection>) -> Result<Plan, String> {
     trace("plan", "create_start", target.as_str());
     let h = hub()?;
@@ -277,7 +303,7 @@ fn create_plan(target: Target, selection: Option<SyncSelection>) -> Result<Plan,
     );
     Ok(p)
 }
-#[tauri::command]
+#[tauri::command(async)]
 fn apply_plan(plan_id: String) -> Result<Transaction, String> {
     trace("apply", "start", format_args!("plan_id={plan_id}"));
     let h = hub()?;
@@ -294,12 +320,12 @@ fn apply_plan(plan_id: String) -> Result<Transaction, String> {
     );
     result
 }
-#[tauri::command]
+#[tauri::command(async)]
 fn auto_sync_profiles() -> Result<Vec<AutoSyncProfile>, String> {
     let h = hub()?;
     h.store.auto_sync_profiles().map_err(err)
 }
-#[tauri::command]
+#[tauri::command(async)]
 fn set_auto_sync(
     target: Target,
     selection: SyncSelection,
@@ -353,14 +379,14 @@ fn set_auto_sync(
         initial_sync: Some(initial_sync),
     })
 }
-#[tauri::command]
+#[tauri::command(async)]
 fn transaction_history(limit: Option<usize>) -> Result<Vec<Transaction>, String> {
     let h = hub()?;
     h.store
         .recent_transactions(limit.unwrap_or(100).clamp(1, 500))
         .map_err(err)
 }
-#[tauri::command]
+#[tauri::command(async)]
 fn rollback_transaction(transaction_id: String) -> Result<Transaction, String> {
     trace(
         "rollback",
@@ -376,27 +402,27 @@ fn rollback_transaction(transaction_id: String) -> Result<Transaction, String> {
     );
     result
 }
-#[tauri::command]
+#[tauri::command(async)]
 fn git_status() -> Result<String, String> {
     let h = hub()?;
     git::status(&h.paths.root).map_err(err)
 }
-#[tauri::command]
+#[tauri::command(async)]
 fn git_diff() -> Result<String, String> {
     let h = hub()?;
     git::diff(&h.paths.root).map_err(err)
 }
-#[tauri::command]
+#[tauri::command(async)]
 fn git_identity() -> Result<GitIdentity, String> {
     let h = hub()?;
     git::identity(&h.paths.root).map_err(err)
 }
-#[tauri::command]
+#[tauri::command(async)]
 fn git_log() -> Result<String, String> {
     let h = hub()?;
     git::log(&h.paths.root).map_err(err)
 }
-#[tauri::command]
+#[tauri::command(async)]
 fn git_commit(
     message: String,
     name: Option<String>,
@@ -443,6 +469,7 @@ pub fn run() {
             capability_detail,
             read_rule,
             save_rule,
+            delete_capability,
             initial_scan,
             finish_init,
             discard_incomplete_init,
