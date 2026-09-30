@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to create or update (for example v0.1.0)"
+        description: "Release tag to create for the selected ref (for example v0.1.0). Does not check out a different commit."
         required: true
 
 permissions:
@@ -22,7 +22,7 @@ env:
 
 jobs:
   linux-x64:
-    name: Ubuntu x64 (deb + AppImage + CLI)
+    name: Ubuntu x64 (deb + CLI)
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -58,7 +58,17 @@ jobs:
           shared-key: linux-x64
 
       - name: Install Tauri CLI
-        run: cargo install tauri-cli --version 2.12.0 --locked
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL -o /tmp/cargo-tauri.tgz \
+            https://github.com/tauri-apps/tauri/releases/download/tauri-cli-v2.12.0/cargo-tauri-x86_64-unknown-linux-gnu.tgz
+          tar -xzf /tmp/cargo-tauri.tgz -C /tmp
+          bin="$(find /tmp -maxdepth 3 -type f -name cargo-tauri -print -quit)"
+          test -n "$bin"
+          install -m 0755 "$bin" "$HOME/.local/bin/cargo-tauri"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          cargo-tauri --version
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -73,8 +83,12 @@ jobs:
 
       - name: Build CLI and desktop bundles
         run: |
+          set -euo pipefail
           cargo build --release -p agenthub-cli
-          cargo tauri build --bundles deb,appimage
+          # ubuntu-24.04 runners cannot reliably run linuxdeploy (it is an AppImage,
+          # FUSE is blocked, and its bundled strip rejects modern glibc). Publish
+          # the .deb plus the raw executables instead of failing the release there.
+          cargo tauri build --bundles deb
 
       - name: Collect Linux artifacts
         run: |
@@ -83,11 +97,10 @@ jobs:
           mkdir -p "$out"
           version="${RELEASE_TAG#v}"
           cp target/release/bundle/deb/*.deb "$out/"
-          cp target/release/bundle/appimage/*.AppImage "$out/"
           cp target/release/agenthub "$out/agenthub-cli-${version}-linux-x64"
           cp target/release/agenthub-desktop "$out/agenthub-desktop-${version}-linux-x64"
-          chmod +x "$out"/*.AppImage "$out"/agenthub-*-linux-x64
-          (cd "$out" && sha256sum * > SHA256SUMS.linux.txt)
+          chmod +x "$out"/agenthub-*-linux-x64
+          (cd "$out" && sha256sum -- * > SHA256SUMS.linux.txt)
           ls -l "$out"
 
       - name: Upload Linux artifacts
@@ -129,7 +142,20 @@ jobs:
           shared-key: windows-x64
 
       - name: Install Tauri CLI
-        run: cargo install tauri-cli --version 2.12.0 --locked
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $zip = Join-Path $env:RUNNER_TEMP "cargo-tauri.zip"
+          $extract = Join-Path $env:RUNNER_TEMP "cargo-tauri"
+          Invoke-WebRequest -Uri "https://github.com/tauri-apps/tauri/releases/download/tauri-cli-v2.12.0/cargo-tauri-x86_64-pc-windows-msvc.zip" -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath $extract -Force
+          $bin = Get-ChildItem $extract -Recurse -Filter cargo-tauri.exe | Select-Object -First 1
+          if (-not $bin) { throw "cargo-tauri.exe was not found in the release archive" }
+          $destDir = Join-Path $env:USERPROFILE ".cargo\bin"
+          New-Item -ItemType Directory -Force -Path $destDir | Out-Null
+          Copy-Item $bin.FullName (Join-Path $destDir "cargo-tauri.exe") -Force
+          & "$destDir\cargo-tauri.exe" --version
+          if ($LASTEXITCODE -ne 0) { throw "Tauri CLI failed to start" }
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -143,7 +169,7 @@ jobs:
         run: |
           $out = "dist-release"
           New-Item -ItemType Directory -Force -Path $out | Out-Null
-          $version = $env:RELEASE_TAG.TrimStart("v")
+          $version = if ($env:RELEASE_TAG.StartsWith("v")) { $env:RELEASE_TAG.Substring(1) } else { $env:RELEASE_TAG }
           Copy-Item target/release/bundle/nsis/*-setup.exe $out
           Copy-Item target/release/bundle/msi/*.msi $out
           Copy-Item target/release/agenthub.exe "$out/agenthub-cli-$version-windows-x64.exe"
@@ -181,11 +207,23 @@ jobs:
         run: |
           set -euo pipefail
           ls -l release-assets
+          if tag_json=$(gh api "repos/${GH_REPO}/git/ref/tags/${RELEASE_TAG}" 2>/dev/null); then
+            tag_type=$(jq -r .object.type <<<"$tag_json")
+            tag_sha=$(jq -r .object.sha <<<"$tag_json")
+            if [[ "$tag_type" == "tag" ]]; then
+              tag_sha=$(gh api "repos/${GH_REPO}/git/tags/${tag_sha}" --jq .object.sha)
+            fi
+            if [[ "$tag_sha" != "${GITHUB_SHA}" ]]; then
+              echo "Refusing to publish: ${RELEASE_TAG} points at ${tag_sha}, this build is ${GITHUB_SHA}."
+              exit 1
+            fi
+          fi
+          notes="Ubuntu x64: .deb, agenthub-desktop, and agenthub CLI. Windows x64: NSIS setup, MSI, portable agenthub-desktop, and agenthub CLI. AppImage is omitted because linuxdeploy cannot run on GitHub-hosted Ubuntu 24.04. Windows builds are unsigned; SmartScreen may warn. Verify downloads with the SHA256SUMS files."
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" release-assets/* --clobber
           else
             gh release create "$RELEASE_TAG" release-assets/* \
-              --target "${{ github.sha }}" \
+              --target "${GITHUB_SHA}" \
               --title "AgentHub $RELEASE_TAG" \
-              --notes "Ubuntu x64: .deb / AppImage / CLI. Windows x64: NSIS setup / MSI / CLI. Windows builds are unsigned; SmartScreen may warn. Verify downloads with the SHA256SUMS files."
+              --notes "$notes"
           fi

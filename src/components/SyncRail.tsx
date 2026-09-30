@@ -25,7 +25,7 @@ export function SyncRail({ dashboard }: { dashboard: Dashboard }) {
     <section className="flow-card material" aria-label={t("overview.title")}>
       <header className="flow-card__header">
         <div>
-          <p className="eyebrow">CANONICAL FLOW</p>
+          <p className="eyebrow">LIBRARY FLOW</p>
           <h2>{t("overview.flowTitle")}</h2>
         </div>
         <span className="flow-card__summary"><Radio size={13} /> {dashboard.auto_sync_targets.length} {t("overview.autoChannels")} · {dashboard.enabled_targets.length} / {targets.length} {t("overview.channels")}</span>
@@ -72,7 +72,7 @@ export function SyncRail({ dashboard }: { dashboard: Dashboard }) {
       </div>
 
       <footer className="flow-card__footer">
-        <span><Code2 size={15} /> Git {t("overview.historyLayer")}</span>
+        <span><Code2 size={15} /> {t("overview.historyLayer")}</span>
         <span><Braces size={15} /> SQLite {t("overview.stateLayer")}</span>
       </footer>
     </section>

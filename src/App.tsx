@@ -33,6 +33,7 @@ import {
   Shuffle,
   Sparkles,
   TerminalSquare,
+  ListChecks,
   Trash2,
   Upload,
   UserRound,
@@ -217,7 +218,7 @@ export default function App() {
         </nav>
         <div className="source-mark">
           <span className="source-mark__icon"><TerminalSquare size={18} /></span>
-          <span><small>CANONICAL SOURCE</small><code>~/.agenthub</code></span>
+          <span><small>AGENTHUB LIBRARY</small><code>~/.agenthub</code></span>
           <span className="source-mark__pulse" aria-label={t("settings.healthy")} />
         </div>
       </aside>
@@ -479,8 +480,8 @@ function HostResources({ onNotify }: { onNotify: (message: string) => void }) {
     finally { setDeleting(false); }
   };
   return <>
-    <PageHeader eyebrow="HOST INVENTORY" title={t("hosts.title")} subtitle={t("hosts.subtitle")} actions={<><Button variant="secondary" disabled={loading || deleting || !unimported.length} title={unimported.length ? undefined : t("hosts.noUnimported")} onClick={() => setSelected(new Set(unimported.map((item) => item.id)))}><Trash2 size={16} />{t("hosts.selectUnimported")} ({unimported.length})</Button><Button variant="secondary" disabled={loading || deleting} onClick={() => void load(target)}><RefreshCw className={loading ? "spin" : ""} size={16} />{t("hosts.rescan")}</Button></>} />
-    <div className="target-tabs host-target-tabs" role="tablist" aria-label={t("hosts.chooseTarget")}>{targetMeta.map((meta) => <button type="button" role="tab" aria-selected={target === meta.id} className={target === meta.id ? "is-selected" : ""} onClick={() => { if (!deleting) setTarget(meta.id); }} key={meta.id}><span className="target-tab__mark">{meta.mark}</span><span><strong>{t(`targets.${meta.id}`)}</strong><small>{meta.description}</small></span><CheckCircle2 size={17} /></button>)}</div>
+    <PageHeader eyebrow="HOST INVENTORY" title={t("hosts.title")} subtitle={t("hosts.subtitle")} actions={<><Button variant="secondary" disabled={loading || deleting || !unimported.length} title={unimported.length ? undefined : t("hosts.noUnimported")} onClick={() => setSelected(new Set(unimported.map((item) => item.id)))}><ListChecks size={16} />{t("hosts.selectUnimported")} ({unimported.length})</Button><Button variant="secondary" disabled={loading || deleting} onClick={() => void load(target)}><RefreshCw className={loading ? "spin" : ""} size={16} />{t("hosts.rescan")}</Button></>} />
+    <div className="target-tabs host-target-tabs" role="tablist" aria-label={t("hosts.chooseTarget")}>{targetMeta.map((meta) => <button type="button" role="tab" aria-selected={target === meta.id} className={target === meta.id ? "is-selected" : ""} onClick={() => { if (deleting) return; setConfirming(false); setAcknowledged(false); setTarget(meta.id); }} key={meta.id}><span className="target-tab__mark">{meta.mark}</span><span><strong>{t(`targets.${meta.id}`)}</strong><small>{meta.description}</small></span><CheckCircle2 size={17} /></button>)}</div>
     <div className="host-legend"><span className="source-pill source-pill--canonical">{t("hosts.canonicalMatch")}</span><span className="source-pill source-pill--host">{t("hosts.hostOnly")}</span><span className="source-pill source-pill--constraint">{t("hosts.constraint")}</span><p>{t("hosts.legendHint")}</p></div>
     {error && <div className="inline-error" role="alert"><Activity size={18} /><span>{error}</span></div>}
     {loading ? <div className="material host-loading"><span className="spinner" /><p>{t("hosts.scanning")}</p></div> : <div className="inventory-grid host-grid">{kindMeta.map(({ id, icon: KindIcon, accent }) => { const group = items.filter((item) => item.kind === id); return <section className={`material inventory-card inventory-card--${accent}`} key={id}><header className="inventory-card__header"><span className="inventory-card__icon"><KindIcon size={20} /></span><div><h2>{t(`kinds.${id}`)}</h2><p>{group.length} {t("hosts.resources")}</p></div><span className="count-badge">{group.length}</span></header><div className="host-resource-list">{group.map((item) => <label className={`${selected.has(item.id) ? "is-selected" : ""} ${!item.deletable ? "is-protected" : ""}`} key={item.id}><input type="checkbox" disabled={!item.deletable || deleting} checked={selected.has(item.id)} onChange={() => setSelected((current) => { const next = new Set(current); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next; })} /><span className="host-resource__icon">{item.deletable ? <CheckCircle2 size={17} /> : <ShieldCheck size={17} />}</span><span className="host-resource__copy"><strong>{item.display_name}</strong><code>{item.path}</code><small>{item.canonical_id ? `${t("hosts.canonicalId")}: ${item.canonical_id}` : item.constraint ? t(`hosts.constraints.${item.constraint}`) : t("hosts.notCanonical")}</small></span><span className={`source-pill source-pill--${item.relation === "canonical_match" ? "canonical" : item.relation === "host_only" ? "host" : "constraint"}`}>{t(`hosts.relations.${item.relation}`)}</span></label>)}{!group.length && <EmptyState icon={KindIcon} title={t("hosts.empty")} body={t("hosts.emptyHint")} compact />}</div></section>; })}</div>}
@@ -1092,7 +1093,7 @@ function Init({ onDone }: { onDone: () => void }) {
           <span><strong>AgentHub</strong><small>FIRST RUN</small></span>
           <span className="init-step">{items === null ? "01" : "02"} / 02</span>
         </header>
-        <PageHeader eyebrow="CANONICAL SETUP" title={t("init.title")} subtitle={t("init.subtitle")} />
+        <PageHeader eyebrow="LIBRARY SETUP" title={t("init.title")} subtitle={t("init.subtitle")} />
         <div className="init-progress" aria-hidden="true"><i className={items === null ? "is-current" : "is-done"} /><i className={items !== null ? "is-current" : ""} /></div>
 
         {error && (
