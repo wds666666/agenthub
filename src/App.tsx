@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type WheelEvent } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -37,7 +37,7 @@ import {
   Upload,
   UserRound,
 } from "lucide-react";
-import { api, type AutoSyncProfile, type Capability, type CapabilityDetail, type CapabilityMutationResult, type Dashboard, type GitIdentity, type Kind, type Plan, type RuleDocument, type RuntimeDiagnostics, type ScanItem, type SyncSelection, type Target, type Transaction } from "./lib/api";
+import { api, type AutoSyncProfile, type Capability, type CapabilityDetail, type CapabilityMutationResult, type Dashboard, type GitIdentity, type HostResource, type Kind, type Plan, type PolicySettings, type RuleDocument, type RuntimeDiagnostics, type ScanItem, type SyncSelection, type Target, type Transaction } from "./lib/api";
 import { t } from "./lib/i18n";
 import agentHubLogo from "./assets/agenthub-logo.png";
 import { Button, Dialog, PageHeader, SearchField, StatusBadge, Toast } from "./components/ui";
@@ -45,12 +45,13 @@ import { SyncRail } from "./components/SyncRail";
 import "./styles/tokens.css";
 import "./styles/app.css";
 
-type Page = "overview" | "inventory" | "sync" | "git" | "transactions" | "settings";
+type Page = "overview" | "inventory" | "hosts" | "sync" | "git" | "transactions" | "settings";
 type Icon = typeof LayoutDashboard;
 
 const nav: Array<{ id: Page; icon: Icon }> = [
   { id: "overview", icon: LayoutDashboard },
   { id: "inventory", icon: Boxes },
+  { id: "hosts", icon: HardDrive },
   { id: "sync", icon: Shuffle },
   { id: "git", icon: GitBranch },
   { id: "transactions", icon: History },
@@ -64,25 +65,48 @@ const kindMeta: Array<{ id: Kind; icon: Icon; accent: string }> = [
   { id: "rule", icon: FileText, accent: "amber" },
 ];
 
-const fullSelection = (items: Capability[]): SyncSelection => ({
+const fullSelection = (items: Capability[], authoritative = false, target: Target = "codex"): SyncSelection => ({
+  skills_managed: true,
   skills: items.filter((item) => item.kind === "skill").map((item) => item.id),
-  plugins: items.filter((item) => item.kind === "plugin").map((item) => item.id),
-  mcp: items.filter((item) => item.kind === "mcp").map((item) => item.id),
-  rules: items.some((item) => item.kind === "rule"),
+  plugins_managed: target === "cursor",
+  plugins: target === "cursor" ? items.filter((item) => item.kind === "plugin").map((item) => item.id) : [],
+  mcp_managed: target !== "agents",
+  mcp: target === "agents" ? [] : items.filter((item) => item.kind === "mcp").map((item) => item.id),
+  rules_managed: target !== "agents",
+  rules: target !== "agents" && items.some((item) => item.kind === "rule"),
+  authoritative,
 });
-const hasSelection = (selection: SyncSelection) => selection.skills.length + selection.plugins.length + selection.mcp.length > 0 || selection.rules;
+const hasSelection = (selection: SyncSelection) => selection.skills_managed || selection.plugins_managed || selection.mcp_managed || selection.rules_managed || selection.skills.length + selection.plugins.length + selection.mcp.length > 0 || selection.rules;
 const sameIds = (left: string[], right: string[]) => JSON.stringify([...left].sort()) === JSON.stringify([...right].sort());
 const sameSelection = (left?: SyncSelection | null, right?: SyncSelection | null) => Boolean(left && right
   && left.rules === right.rules
+  && left.rules_managed === right.rules_managed
+  && left.skills_managed === right.skills_managed
+  && left.plugins_managed === right.plugins_managed
+  && left.mcp_managed === right.mcp_managed
+  && left.authoritative === right.authoritative
   && sameIds(left.skills, right.skills)
   && sameIds(left.plugins, right.plugins)
   && sameIds(left.mcp, right.mcp));
 
+const handoffBoundaryWheel = (event: WheelEvent<HTMLElement>) => {
+  const node = event.currentTarget;
+  const atTop = node.scrollTop <= 0;
+  const atBottom = Math.ceil(node.scrollTop + node.clientHeight) >= node.scrollHeight;
+  if ((event.deltaY < 0 && atTop) || (event.deltaY > 0 && atBottom)) {
+    event.preventDefault();
+    window.scrollBy({ top: event.deltaY, behavior: "auto" });
+  }
+};
+const planWarning = (warning: string) => warning === "claude_plugins_cli_managed" ? t("sync.claudePluginConstraint") : warning === "codex_plugins_marketplace_managed" ? t("sync.codexPluginConstraint") : warning;
+
 const targetMeta: Array<{ id: Target; mark: string; description: string }> = [
+  { id: "agents", mark: "AG", description: "Shared Agent Skills" },
   { id: "cursor", mark: "CU", description: "Cursor" },
   { id: "codex", mark: "CX", description: "OpenAI Codex" },
   { id: "claude", mark: "CL", description: "Claude Code" },
 ];
+const ruleTargetMeta = targetMeta.filter((item) => item.id !== "agents");
 
 function transactionStatus(status: string) {
   const keys: Record<string, string> = {
@@ -160,6 +184,7 @@ export default function App() {
   const content = {
     overview: <Overview data={dashboard} />,
     inventory: <Inventory onChanged={refresh} onNotify={setToast} />,
+    hosts: <HostResources onNotify={setToast} />,
     sync: <Sync onApplied={refresh} onNotify={setToast} />,
     git: <GitPage onCommitted={() => { setToast(t("toast.committed")); refresh(); }} />,
     transactions: <Transactions data={dashboard} onChanged={refresh} onNotify={setToast} />,
@@ -264,6 +289,10 @@ function Inventory({ onChanged, onNotify }: { onChanged: () => void; onNotify: (
   const [loadingDetail, setLoadingDetail] = useState("");
   const [deleteCandidate, setDeleteCandidate] = useState<Capability | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [scanItems, setScanItems] = useState<ScanItem[] | null>(null);
+  const [scanSelected, setScanSelected] = useState<Set<string>>(new Set());
+  const [scanKind, setScanKind] = useState<Kind>("skill");
+  const [scanBusy, setScanBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const loadInventory = useCallback(() => { api.inventory().then(setItems).catch(() => setItems([])); }, []);
   useEffect(loadInventory, [loadInventory]);
@@ -325,6 +354,25 @@ function Inventory({ onChanged, onNotify }: { onChanged: () => void; onNotify: (
     } catch (value) { setLoadError(String(value)); }
     finally { setDeleting(false); }
   };
+  const scanForImport = async () => {
+    setScanBusy(true); setLoadError("");
+    try { setScanItems(await api.scan()); setScanSelected(new Set()); }
+    catch (value) { setLoadError(String(value)); }
+    finally { setScanBusy(false); }
+  };
+  const importScanned = async () => {
+    setScanBusy(true); setLoadError("");
+    try {
+      const result = await api.importScanned([...scanSelected]);
+      setScanItems(null); setScanSelected(new Set()); loadInventory(); onChanged();
+      const autoFailures = result.auto_sync.filter((outcome) => outcome.error).length;
+      onNotify(`${result.imported.length} ${t("inventory.scanImported")} · ${result.skipped_duplicates} ${t("inventory.scanSkipped")}${autoFailures ? ` · ${autoFailures} ${t("inventory.scanAutoFailed")}` : ""}`);
+    } catch (value) { setLoadError(String(value)); }
+    finally { setScanBusy(false); }
+  };
+  const canonicalDigests = useMemo(() => new Set(items.map((item) => `${item.kind}:${item.digest}`)), [items]);
+  const visibleScanItems = (scanItems ?? []).filter((item) => item.kind === scanKind);
+  const scanImportableItems = (scanItems ?? []).filter((item) => item.importable && !canonicalDigests.has(`${item.kind}:${item.digest}`));
 
   return (
     <>
@@ -334,6 +382,7 @@ function Inventory({ onChanged, onNotify }: { onChanged: () => void; onNotify: (
         actions={
           <div className="inventory-actions">
             <SearchField value={query} onChange={setQuery} />
+            <Button variant="secondary" disabled={scanBusy} onClick={() => void scanForImport()}><RefreshCw className={scanBusy ? "spin" : ""} size={16} />{t("inventory.scanImport")}</Button>
             <input ref={fileRef} className="sr-only" type="file" accept=".md,.mdc,text/markdown,text/plain" onChange={(event) => void importMarkdown(event.target.files?.[0])} />
             <Button variant="secondary" onClick={() => fileRef.current?.click()}><Upload size={16} />{t("inventory.importRule")}</Button>
             <Button onClick={() => setEditor({ document: blankRule(), create: true, imported: false })}><Plus size={16} />{t("inventory.newRule")}</Button>
@@ -385,8 +434,55 @@ function Inventory({ onChanged, onNotify }: { onChanged: () => void; onNotify: (
         <p>{t("inventory.deleteBody")}</p>
         <div className="delete-capability-preview"><span className="target-tab__mark">{deleteCandidate ? kindMeta.find((kind) => kind.id === deleteCandidate.kind)?.id.slice(0, 2).toUpperCase() : ""}</span><span><strong>{deleteCandidate?.display_name}</strong><code>{deleteCandidate?.id}</code></span></div>
       </Dialog>
+      <Dialog open={scanItems !== null} wide onClose={() => !scanBusy && setScanItems(null)} title={t("inventory.scanImportTitle")} actions={<><Button variant="secondary" disabled={scanBusy} onClick={() => setScanItems(null)}>{t("common.cancel")}</Button><Button disabled={scanBusy || scanSelected.size === 0} onClick={() => void importScanned()}>{scanBusy ? <RefreshCw className="spin" size={16} /> : <Upload size={16} />}{scanBusy ? t("inventory.importingScan") : t("inventory.importScanned")}</Button></>}>
+        <p>{t("inventory.scanImportBody")}</p>
+        <div className="scan-kind-tabs" role="tablist" aria-label={t("init.groups")}>
+          {kindMeta.map(({ id, icon: KindIcon }) => { const group = (scanItems ?? []).filter((item) => item.kind === id); return <button type="button" role="tab" aria-selected={scanKind === id} className={scanKind === id ? "is-selected" : ""} onClick={() => setScanKind(id)} key={id}><KindIcon size={17} /><span><strong>{t(`kinds.${id}`)}</strong><small>{group.filter((item) => scanSelected.has(item.id)).length} / {group.length}</small></span></button>; })}
+        </div>
+        <div className="scan-group-toolbar"><span>{visibleScanItems.length} {t("init.discovered")}</span><Button variant="quiet" disabled={scanBusy || !scanImportableItems.some((item) => item.kind === scanKind)} onClick={() => setScanSelected((current) => { const next = new Set(current); const available = scanImportableItems.filter((item) => item.kind === scanKind); const allSelected = available.every((item) => next.has(item.id)); available.forEach((item) => allSelected ? next.delete(item.id) : next.add(item.id)); return next; })}>{t("init.selectGroup")}</Button></div>
+        <div className="scan-list scan-list--dialog">
+          {visibleScanItems.length === 0 && <EmptyState icon={Boxes} title={t("init.emptyGroup")} body={t("init.emptyGroupHint")} compact />}
+          {visibleScanItems.map((item) => { const exists = canonicalDigests.has(`${item.kind}:${item.digest}`); const disabled = !item.importable || exists; const checked = scanSelected.has(item.id); const name = item.source_key?.replace(/^server:/, "") ?? item.path.split(/[\\/]/).pop(); return <label className={`${checked ? "is-selected" : ""} ${disabled ? "is-disabled" : ""}`} key={item.id}><input type="checkbox" checked={checked} disabled={scanBusy || disabled} onChange={() => setScanSelected((current) => { const next = new Set(current); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next; })} /><span className="scan-check">{disabled ? <AlertTriangle size={15} /> : <CheckCircle2 size={17} />}</span><span className="scan-copy"><strong>{name}</strong><small><b>{item.source}</b><span>{item.path}</span></small>{exists && <em>{t("inventory.alreadyCanonical")}</em>}{!exists && item.warning && <em>{t(`init.${item.warning}`)}</em>}</span><code>{item.digest.slice(0, 8)}</code></label>; })}
+        </div>
+      </Dialog>
     </>
   );
+}
+
+function HostResources({ onNotify }: { onNotify: (message: string) => void }) {
+  const [target, setTarget] = useState<Target>("cursor");
+  const [items, setItems] = useState<HostResource[]>([]);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [confirming, setConfirming] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const load = useCallback(async (nextTarget = target) => {
+    setLoading(true); setError(""); setSelected(new Set());
+    try { setItems(await api.hostInventory(nextTarget)); }
+    catch (value) { setError(String(value)); setItems([]); }
+    finally { setLoading(false); }
+  }, [target]);
+  useEffect(() => { void load(); }, [load]);
+  const chosen = items.filter((item) => selected.has(item.id));
+  const remove = async () => {
+    setDeleting(true); setError("");
+    try {
+      const result = await api.cleanupHostResources(target, [...selected]);
+      setConfirming(false); await load(target);
+      onNotify(`${result.deleted.length} ${t("hosts.deleted")} · ${result.backup_path}`);
+    } catch (value) { setError(String(value)); }
+    finally { setDeleting(false); }
+  };
+  return <>
+    <PageHeader eyebrow="HOST INVENTORY" title={t("hosts.title")} subtitle={t("hosts.subtitle")} actions={<Button variant="secondary" disabled={loading} onClick={() => void load(target)}><RefreshCw className={loading ? "spin" : ""} size={16} />{t("hosts.rescan")}</Button>} />
+    <div className="target-tabs host-target-tabs" role="tablist" aria-label={t("hosts.chooseTarget")}>{targetMeta.map((meta) => <button type="button" role="tab" aria-selected={target === meta.id} className={target === meta.id ? "is-selected" : ""} onClick={() => setTarget(meta.id)} key={meta.id}><span className="target-tab__mark">{meta.mark}</span><span><strong>{t(`targets.${meta.id}`)}</strong><small>{meta.description}</small></span><CheckCircle2 size={17} /></button>)}</div>
+    <div className="host-legend"><span className="source-pill source-pill--canonical">{t("hosts.canonicalMatch")}</span><span className="source-pill source-pill--host">{t("hosts.hostOnly")}</span><span className="source-pill source-pill--constraint">{t("hosts.constraint")}</span><p>{t("hosts.legendHint")}</p></div>
+    {error && <div className="inline-error" role="alert"><Activity size={18} /><span>{error}</span></div>}
+    {loading ? <div className="material host-loading"><span className="spinner" /><p>{t("hosts.scanning")}</p></div> : <div className="inventory-grid host-grid">{kindMeta.map(({ id, icon: KindIcon, accent }) => { const group = items.filter((item) => item.kind === id); return <section className={`material inventory-card inventory-card--${accent}`} key={id}><header className="inventory-card__header"><span className="inventory-card__icon"><KindIcon size={20} /></span><div><h2>{t(`kinds.${id}`)}</h2><p>{group.length} {t("hosts.resources")}</p></div><span className="count-badge">{group.length}</span></header><div className="host-resource-list">{group.map((item) => <label className={`${selected.has(item.id) ? "is-selected" : ""} ${!item.deletable ? "is-protected" : ""}`} key={item.id}><input type="checkbox" disabled={!item.deletable || deleting} checked={selected.has(item.id)} onChange={() => setSelected((current) => { const next = new Set(current); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next; })} /><span className="host-resource__icon">{item.deletable ? <CheckCircle2 size={17} /> : <ShieldCheck size={17} />}</span><span className="host-resource__copy"><strong>{item.display_name}</strong><code>{item.path}</code><small>{item.canonical_id ? `${t("hosts.canonicalId")}: ${item.canonical_id}` : item.constraint ? t(`hosts.constraints.${item.constraint}`) : t("hosts.notCanonical")}</small></span><span className={`source-pill source-pill--${item.relation === "canonical_match" ? "canonical" : item.relation === "host_only" ? "host" : "constraint"}`}>{t(`hosts.relations.${item.relation}`)}</span></label>)}{!group.length && <EmptyState icon={KindIcon} title={t("hosts.empty")} body={t("hosts.emptyHint")} compact />}</div></section>; })}</div>}
+    {selected.size > 0 && <div className="host-cleanup-bar"><div><strong>{selected.size} {t("hosts.selected")}</strong><span>{t("hosts.cleanupHint")}</span></div><Button variant="danger" onClick={() => setConfirming(true)}><Trash2 size={16} />{t("hosts.deleteSelected")}</Button></div>}
+    <Dialog open={confirming} onClose={() => !deleting && setConfirming(false)} title={t("hosts.deleteTitle")} actions={<><Button variant="secondary" disabled={deleting} onClick={() => setConfirming(false)}>{t("common.cancel")}</Button><Button variant="danger" disabled={deleting} onClick={() => void remove()}>{deleting ? <RefreshCw className="spin" size={16} /> : <Trash2 size={16} />}{t("hosts.deleteAction")}</Button></>}><p>{t("hosts.deleteBody")}</p><div className="host-delete-preview">{chosen.map((item) => <span key={item.id}><strong>{item.display_name}</strong><code>{item.path}</code></span>)}</div>{chosen.some((item) => item.relation === "canonical_match") && <div className="warning-banner"><AlertTriangle size={17} /><span>{t("hosts.driftWarning")}</span></div>}</Dialog>
+  </>;
 }
 
 function CapabilityDetailDialog({ detail, onClose, onEditRule, onDelete }: { detail: CapabilityDetail; onClose: () => void; onEditRule?: () => void; onDelete: () => void }) {
@@ -488,7 +584,7 @@ function RuleEditor({ initial, create, imported, onClose, onSaved }: { initial: 
           </div>
           <fieldset className="field-group"><legend>{t("inventory.activation")}</legend><div className="segmented-control">{(["always", "manual", "paths"] as const).map((value) => <label className={draft.activation === value ? "is-selected" : ""} key={value}><input type="radio" name="activation" checked={draft.activation === value} onChange={() => update("activation", value)} /><span>{t(`inventory.activation${value[0].toUpperCase()}${value.slice(1)}`)}</span></label>)}</div></fieldset>
           {draft.activation === "paths" && <label className="field"><span>{t("inventory.paths")}</span><textarea className="rule-paths resize-none" value={pathsText} aria-invalid={Boolean(errors.paths)} aria-describedby={errors.paths ? "rule-paths-help rule-paths-error" : "rule-paths-help"} onChange={(event) => { setPathsText(event.target.value); setDirty(true); setErrors((current) => ({ ...current, paths: "" })); }} /><small id="rule-paths-help">{t("inventory.pathsHint")}</small>{errors.paths && <em id="rule-paths-error" role="alert">{errors.paths}</em>}</label>}
-          <fieldset className="field-group"><legend>{t("inventory.targets")}</legend><div className="target-checks">{targetMeta.map((item) => <label className={draft.targets.includes(item.id) ? "is-selected" : ""} key={item.id}><input type="checkbox" checked={draft.targets.includes(item.id)} onChange={() => toggleTarget(item.id)} /><span className="target-tab__mark">{item.mark}</span><strong>{t(`targets.${item.id}`)}</strong><CheckCircle2 size={17} /></label>)}</div>{errors.targets && <em role="alert">{errors.targets}</em>}</fieldset>
+          <fieldset className="field-group"><legend>{t("inventory.targets")}</legend><div className="target-checks">{ruleTargetMeta.map((item) => <label className={draft.targets.includes(item.id) ? "is-selected" : ""} key={item.id}><input type="checkbox" checked={draft.targets.includes(item.id)} onChange={() => toggleTarget(item.id)} /><span className="target-tab__mark">{item.mark}</span><strong>{t(`targets.${item.id}`)}</strong><CheckCircle2 size={17} /></label>)}</div>{errors.targets && <em role="alert">{errors.targets}</em>}</fieldset>
           <label className="field"><span>{t("inventory.body")}</span><textarea className="rule-body resize-none" value={draft.body} aria-invalid={Boolean(errors.body)} aria-describedby={errors.body ? "rule-body-help rule-body-error" : "rule-body-help"} onChange={(event) => update("body", event.target.value)} /><small id="rule-body-help">{t("inventory.bodyHint")}</small>{errors.body && <em id="rule-body-error" role="alert">{errors.body}</em>}</label>
         </form>
       )}
@@ -501,6 +597,7 @@ function Sync({ onApplied, onNotify }: { onApplied: () => void; onNotify: (messa
   const [plan, setPlan] = useState<Plan | null>(null);
   const [inventory, setInventory] = useState<Capability[]>([]);
   const [profiles, setProfiles] = useState<AutoSyncProfile[]>([]);
+  const [policy, setPolicy] = useState<PolicySettings>({ strict_authoritative: false, sync_after_reverse_import: false });
   const [selection, setSelection] = useState<SyncSelection | null>(null);
   const [selectionQuery, setSelectionQuery] = useState("");
   const [busy, setBusy] = useState(false);
@@ -529,11 +626,12 @@ function Sync({ onApplied, onNotify }: { onApplied: () => void; onNotify: (messa
   }, [plan]);
   const affectedCapabilities = planSummary.reduce((sum, item) => sum + item.summary.affected, 0);
   useEffect(() => {
-    Promise.all([api.inventory(), api.autoSyncProfiles()]).then(([items, nextProfiles]) => {
+    Promise.all([api.inventory(), api.autoSyncProfiles(), api.policySettings()]).then(([items, nextProfiles, nextPolicy]) => {
       setInventory(items);
       setProfiles(nextProfiles);
+      setPolicy(nextPolicy);
       const saved = nextProfiles.find((profile) => profile.target === target);
-      setSelection(saved && hasSelection(saved.selection) ? saved.selection : fullSelection(items));
+      setSelection(nextPolicy.strict_authoritative ? fullSelection(items, true, target) : saved && hasSelection(saved.selection) ? saved.selection : fullSelection(items, false, target));
     }).catch((value) => setError(String(value)));
   }, [target]);
   const currentProfile = profiles.find((profile) => profile.target === target);
@@ -542,18 +640,21 @@ function Sync({ onApplied, onNotify }: { onApplied: () => void; onNotify: (messa
   const selectionItems = useMemo(() => inventory.filter((item) => `${item.id} ${item.display_name}`.toLowerCase().includes(selectionQuery.toLowerCase())), [inventory, selectionQuery]);
   const selectedCount = selection ? selection.skills.length + selection.plugins.length + selection.mcp.length + (selection.rules ? inventory.filter((item) => item.kind === "rule").length : 0) : 0;
   const profileSelectionCount = (profile?: AutoSyncProfile) => profile ? profile.selection.skills.length + profile.selection.plugins.length + profile.selection.mcp.length + (profile.selection.rules ? inventory.filter((item) => item.kind === "rule").length : 0) : 0;
+  const visibleKinds: Array<"skill" | "plugin" | "mcp"> = target === "agents" ? ["skill"] : ["skill", "plugin", "mcp"];
   const toggleCapability = (item: Capability) => {
     if (!selection) return;
+    if (item.kind === "plugin" && target !== "cursor") return;
     const key = item.kind === "skill" ? "skills" : item.kind === "plugin" ? "plugins" : "mcp";
+    const managedKey = `${key}_managed` as "skills_managed" | "plugins_managed" | "mcp_managed";
     const values = selection[key];
-    setSelection({ ...selection, [key]: values.includes(item.id) ? values.filter((id) => id !== item.id) : [...values, item.id] });
+    setSelection({ ...selection, [managedKey]: true, [key]: values.includes(item.id) ? values.filter((id) => id !== item.id) : [...values, item.id] });
     setPlan(null);
   };
   const chooseTarget = (nextTarget: Target) => {
     setTarget(nextTarget);
     setPlan(null);
     const saved = profiles.find((profile) => profile.target === nextTarget);
-    setSelection(saved && hasSelection(saved.selection) ? saved.selection : fullSelection(inventory));
+    setSelection(policy.strict_authoritative ? fullSelection(inventory, true, nextTarget) : saved && hasSelection(saved.selection) ? saved.selection : fullSelection(inventory, false, nextTarget));
   };
 
   const makePlan = async () => {
@@ -630,22 +731,26 @@ function Sync({ onApplied, onNotify }: { onApplied: () => void; onNotify: (messa
 
         <section className="material sync-selection">
           <header className="sync-selection__header">
-            <div><p className="eyebrow">SYNC SCOPE</p><h2>{t("sync.scopeTitle")}</h2><p>{t("sync.scopeHint")}</p></div>
-            <StatusBadge tone="ok">{selectedCount} / {inventory.length} {t("sync.selected")}</StatusBadge>
+            <div><p className="eyebrow">SYNC SCOPE</p><h2>{t("sync.scopeTitle")}</h2><p>{target === "agents" ? t("sync.agentsHint") : t("sync.scopeHint")}</p></div>
+            <StatusBadge tone={policy.strict_authoritative ? "warning" : "ok"}>{policy.strict_authoritative ? t("sync.strictActive") : `${selectedCount} / ${inventory.length} ${t("sync.selected")}`}</StatusBadge>
           </header>
           <div className="sync-selection__toolbar">
             <SearchField value={selectionQuery} onChange={setSelectionQuery} />
-            <Button variant="quiet" disabled={!selection} onClick={() => selection && setSelection({ ...selection, skills: inventory.filter((item) => item.kind === "skill").map((item) => item.id), plugins: inventory.filter((item) => item.kind === "plugin").map((item) => item.id), mcp: inventory.filter((item) => item.kind === "mcp").map((item) => item.id), rules: inventory.some((item) => item.kind === "rule") })}>{t("sync.selectAll")}</Button>
-            <Button variant="quiet" disabled={!selection} onClick={() => selection && setSelection({ ...selection, skills: [], plugins: [], mcp: [], rules: false })}>{t("sync.clearAll")}</Button>
+            <Button variant="quiet" disabled={!selection || policy.strict_authoritative} onClick={() => setSelection(fullSelection(inventory, false, target))}>{t("sync.selectAll")}</Button>
+            <Button variant="quiet" disabled={!selection || policy.strict_authoritative} onClick={() => selection && setSelection({ ...selection, skills_managed: true, skills: [], plugins_managed: target === "cursor", plugins: [], mcp_managed: target !== "agents", mcp: [], rules_managed: target !== "agents", rules: false, authoritative: false })}>{t("sync.clearManaged")}</Button>
           </div>
           <p className="scope-impact-note"><ShieldCheck size={15} />{t("sync.scopeDeleteHint")}</p>
           <div className="sync-selection__groups">
-            {(["skill", "plugin", "mcp"] as const).map((kind) => {
+            {visibleKinds.map((kind) => {
               const items = selectionItems.filter((item) => item.kind === kind);
-              const selected = selection?.[kind === "skill" ? "skills" : kind === "plugin" ? "plugins" : "mcp"] ?? [];
-              return <details open key={kind} className="sync-selection__group"><summary><span>{t(`kinds.${kind}`)}</span><small>{selected.length} / {inventory.filter((item) => item.kind === kind).length}</small></summary><div>{items.map((item) => <label key={item.id} className={selected.includes(item.id) ? "is-selected" : ""}><input type="checkbox" checked={selected.includes(item.id)} onChange={() => toggleCapability(item)} /><span className="sync-selection__check"><CheckCircle2 size={15} /></span><span><strong>{item.display_name}</strong><small>{item.id}</small></span></label>)}</div></details>;
+              const key = kind === "skill" ? "skills" : kind === "plugin" ? "plugins" : "mcp";
+              const managedKey = `${key}_managed` as "skills_managed" | "plugins_managed" | "mcp_managed";
+              const selected = selection?.[key] ?? [];
+              const locked = kind === "plugin" && target !== "cursor";
+              const managed = !locked && Boolean(selection?.authoritative || selection?.[managedKey] || selected.length);
+              return <details open key={kind} className={`sync-selection__group ${managed ? "is-managed" : ""} ${locked ? "is-locked" : ""}`}><summary><span>{t(`kinds.${kind}`)}</span><small>{locked ? t("sync.cliManaged") : managed ? `${selected.length} / ${inventory.filter((item) => item.kind === kind).length}` : t("sync.notManaged")}</small></summary><div onWheel={handoffBoundaryWheel}>{locked ? <div className="sync-domain-constraint"><ShieldCheck size={16} /><span>{t(target === "claude" ? "sync.claudePluginConstraint" : "sync.codexPluginConstraint")}</span></div> : <><label className={`sync-domain-toggle ${managed ? "is-selected" : ""}`}><input type="checkbox" checked={managed} disabled={policy.strict_authoritative} onChange={() => selection && setSelection({ ...selection, [managedKey]: !managed, authoritative: false })} /><span className="sync-selection__check"><CheckCircle2 size={15} /></span><span><strong>{t("sync.manageDomain")}</strong><small>{managed ? t("sync.emptyMeansClear") : t("sync.domainUntouched")}</small></span></label>{items.map((item) => <label key={item.id} className={selected.includes(item.id) ? "is-selected" : ""}><input type="checkbox" disabled={!managed || policy.strict_authoritative} checked={selected.includes(item.id)} onChange={() => toggleCapability(item)} /><span className="sync-selection__check"><CheckCircle2 size={15} /></span><span><strong>{item.display_name}</strong><small>{item.id}</small></span></label>)}</>}</div></details>;
             })}
-            <label className={`sync-selection__rules ${selection?.rules ? "is-selected" : ""}`}><input type="checkbox" checked={Boolean(selection?.rules)} onChange={() => { if (selection) { setSelection({ ...selection, rules: !selection.rules }); setPlan(null); } }} /><span className="sync-selection__check"><CheckCircle2 size={15} /></span><span><strong>{t("kinds.rule")}</strong><small>{t("sync.rulesToggle")}</small></span><StatusBadge tone={selection?.rules ? "ok" : "warning"}>{selection?.rules ? t("sync.included") : t("sync.excluded")}</StatusBadge></label>
+            {target !== "agents" && <label className={`sync-selection__rules ${selection?.rules_managed ? "is-selected" : ""}`}><input type="checkbox" checked={Boolean(selection?.rules_managed)} disabled={policy.strict_authoritative} onChange={() => { if (selection) { const managed = !selection.rules_managed; setSelection({ ...selection, rules_managed: managed, rules: managed, authoritative: false }); setPlan(null); } }} /><span className="sync-selection__check"><CheckCircle2 size={15} /></span><span><strong>{t("kinds.rule")}</strong><small>{selection?.rules_managed ? t("sync.rulesIncludedHint") : t("sync.domainUntouched")}</small></span><StatusBadge tone={selection?.rules_managed ? "ok" : "warning"}>{selection?.rules_managed ? t("sync.included") : t("sync.excluded")}</StatusBadge></label>}
           </div>
         </section>
 
@@ -662,7 +767,7 @@ function Sync({ onApplied, onNotify }: { onApplied: () => void; onNotify: (messa
             </div>
             <div className="plan-panel__actions">
               <Button variant="secondary" onClick={makePlan} disabled={busy || !selection}>{busy ? <RefreshCw className="spin" size={17} /> : <Braces size={17} />} {busy ? t("sync.planning") : t("sync.plan")}</Button>
-              <Button onClick={() => setConfirm("enable_auto")} disabled={busy || !selection || selectedCount === 0 || (autoEnabled && !scopeChanged)}><Radio size={17} /> {autoEnabled ? (scopeChanged ? t("sync.updateAuto") : t("sync.autoEnabled")) : t("sync.enableAuto")}</Button>
+              <Button onClick={() => setConfirm("enable_auto")} disabled={busy || !selection || !hasSelection(selection) || (autoEnabled && !scopeChanged)}><Radio size={17} /> {autoEnabled ? (scopeChanged ? t("sync.updateAuto") : t("sync.autoEnabled")) : t("sync.enableAuto")}</Button>
               {autoEnabled && <Button variant="quiet" onClick={() => setConfirm("disable_auto")} disabled={busy}>{t("sync.disableAuto")}</Button>}
             </div>
           </div>
@@ -678,6 +783,7 @@ function Sync({ onApplied, onNotify }: { onApplied: () => void; onNotify: (messa
           {plan && (
             <>
               <div className="snapshot-line"><span>{t("sync.canonicalSnapshot")}</span><code>{plan.canonical_digest.slice(0, 20)}</code><StatusBadge tone={plan.git.dirty ? "warning" : "ok"}>{plan.git.dirty ? t("overview.pending") : t("overview.clean")}</StatusBadge></div>
+              {plan.warnings.length > 0 && <div className="plan-warnings">{plan.warnings.map((warning) => <p key={warning}><AlertTriangle size={15} />{planWarning(warning)}</p>)}</div>}
               <div className="plan-capability-grid" aria-label={t("sync.capabilityChanges")}>
                 {planSummary.map(({ id, icon: SummaryIcon, accent, summary }) => (
                   <article className={`plan-capability plan-capability--${accent}`} key={id}>
@@ -888,7 +994,17 @@ function Transactions({ data, onChanged, onNotify }: { data: Dashboard; onChange
 
 function SettingsPage({ data }: { data: Dashboard }) {
   const [diagnostics, setDiagnostics] = useState<RuntimeDiagnostics | null>(null);
+  const [policy, setPolicy] = useState<PolicySettings>({ strict_authoritative: false, sync_after_reverse_import: false });
+  const [savingPolicy, setSavingPolicy] = useState(false);
+  const [policyError, setPolicyError] = useState("");
   useEffect(() => { api.runtimeDiagnostics().then(setDiagnostics).catch(() => undefined); }, []);
+  useEffect(() => { api.policySettings().then(setPolicy).catch((value) => setPolicyError(String(value))); }, []);
+  const updatePolicy = async (next: PolicySettings) => {
+    setSavingPolicy(true); setPolicyError("");
+    try { setPolicy(await api.setPolicySettings(next)); }
+    catch (value) { setPolicyError(String(value)); }
+    finally { setSavingPolicy(false); }
+  };
   const cards = [
     { icon: HardDrive, title: t("settings.canonical"), hint: t("settings.canonicalHint"), value: diagnostics?.canonical_root ?? "~/.agenthub", meta: diagnostics ? (diagnostics.git_available ? t("settings.gitReady") : t("settings.gitMissing")) : "Git", tone: diagnostics && !diagnostics.git_available ? "amber" : "blue" },
     { icon: Database, title: t("settings.database"), hint: t("settings.databaseHint"), value: "state/agenthub.db", meta: t("settings.localOnly"), tone: "purple" },
@@ -912,6 +1028,17 @@ function SettingsPage({ data }: { data: Dashboard }) {
         <span><KeyRound size={21} /></span>
         <div><h2>MCP Secrets</h2><p>XChaCha20-Poly1305 · <code>secrets/master.key</code></p></div>
         <StatusBadge tone="ok">{t("settings.localOnly")}</StatusBadge>
+      </section>
+      <section className="material policy-panel">
+        <header><div><p className="eyebrow">AUTHORITY POLICY</p><h2>{t("settings.coverageTitle")}</h2><p>{t("settings.coverageHint")}</p></div><StatusBadge tone={policy.strict_authoritative ? "warning" : "ok"}>{policy.strict_authoritative ? t("settings.strict") : t("settings.scoped")}</StatusBadge></header>
+        {policyError && <div className="inline-error" role="alert"><Activity size={17} /><span>{policyError}</span></div>}
+        <button type="button" className={`policy-toggle ${policy.strict_authoritative ? "is-enabled" : ""}`} disabled={savingPolicy} onClick={() => void updatePolicy({ ...policy, strict_authoritative: !policy.strict_authoritative })}>
+          <span><ShieldCheck size={20} /></span><span><strong>{t("settings.strictOverwrite")}</strong><small>{t("settings.strictOverwriteHint")}</small></span><i aria-hidden="true"><b /></i>
+        </button>
+        <button type="button" className={`policy-toggle ${policy.sync_after_reverse_import ? "is-enabled" : ""}`} disabled={savingPolicy} onClick={() => void updatePolicy({ ...policy, sync_after_reverse_import: !policy.sync_after_reverse_import })}>
+          <span><RefreshCw size={20} /></span><span><strong>{t("settings.syncAfterImport")}</strong><small>{t("settings.syncAfterImportHint")}</small></span><i aria-hidden="true"><b /></i>
+        </button>
+        <div className="policy-guards"><span><CheckCircle2 size={15} />{t("settings.planGuard")}</span><span><CheckCircle2 size={15} />{t("settings.backupGuard")}</span><span><CheckCircle2 size={15} />{t("settings.vendorGuard")}</span></div>
       </section>
     </>
   );

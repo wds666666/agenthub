@@ -5,6 +5,7 @@ import { t } from "../lib/i18n";
 import agentHubLogo from "../assets/agenthub-logo.png";
 
 const targets: Array<{ id: Target; mark: string }> = [
+  { id: "agents", mark: "AG" },
   { id: "cursor", mark: "CU" },
   { id: "codex", mark: "CX" },
   { id: "claude", mark: "CL" },
@@ -27,7 +28,7 @@ export function SyncRail({ dashboard }: { dashboard: Dashboard }) {
           <p className="eyebrow">CANONICAL FLOW</p>
           <h2>{t("overview.flowTitle")}</h2>
         </div>
-        <span className="flow-card__summary"><Radio size={13} /> {dashboard.auto_sync_targets.length} {t("overview.autoChannels")} · {dashboard.enabled_targets.length} / 3 {t("overview.channels")}</span>
+        <span className="flow-card__summary"><Radio size={13} /> {dashboard.auto_sync_targets.length} {t("overview.autoChannels")} · {dashboard.enabled_targets.length} / {targets.length} {t("overview.channels")}</span>
       </header>
 
       <div className="flow-topology">

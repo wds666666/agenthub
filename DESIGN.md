@@ -28,6 +28,10 @@ The signature component is the **Canonical Flow**: a luminous source node, four 
 
 Initialization uses four quiet capability groups rather than one undifferentiated scrolling list. Group headers carry icon, name, selected/available count and group-level selection; rows allocate the flexible column to the full resource name, with source and path as secondary metadata. The sync Plan uses the same capability vocabulary and places named create/replace/delete chips above the lower-level file-path disclosure.
 
+Host Resources uses the same four capability groups, with target tabs as the primary axis. Small semantic source pills use blue for a Canonical match, neutral graphite for host-only content, and amber for a protected host constraint. Destructive selection never relies on color alone: every row includes text, icon and control state, while protected rows retain their explanation in place.
+
+Long synchronization pages keep the document as the primary scroll surface. Compact inner lists return boundary gestures to the page; no capability picker may trap upward navigation. A destructive empty-domain projection is represented as a named state such as `Clear Shared Agents Skills`, never inferred from an empty selection alone.
+
 The AgentHub brand mark is a restrained graphite rounded square containing one continuous electric-blue orchestration symbol: a central Canonical core with three projection channels, whose negative space suggests an abstract “A”. It stays flat and legible at 16–32px; glow, circular arrows, robot-face geometry, decorative nodes and literal lettering are prohibited. The same raster source is used for the in-app brand, window icon, and generated package icon set. Capability stream lengths are data-bound to their displayed counts: the largest non-zero inventory occupies the full track, zero has no fill, and other domains scale proportionally.
 
 ## 4. Components

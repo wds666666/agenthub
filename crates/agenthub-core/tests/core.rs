@@ -1,5 +1,5 @@
 use agenthub_core::{
-    canonical, git,
+    adapters, canonical, git, host,
     models::{
         CapabilityKind, GitSnapshot, McpServer, RuleDocument, ScanItem, SyncSelection, Target,
         Transaction, TransactionMode,
@@ -78,6 +78,41 @@ fn scanner_is_strictly_user_global() {
 }
 
 #[test]
+fn scanner_finds_nested_agent_skills_without_entering_hidden_directories() {
+    let (temp, hub) = fixture();
+    let nested = temp.path().join(".agents/skills/team/review");
+    fs::create_dir_all(&nested).unwrap();
+    fs::write(nested.join("SKILL.md"), "# Review").unwrap();
+    let hidden = temp.path().join(".agents/skills/.cache/hidden");
+    fs::create_dir_all(&hidden).unwrap();
+    fs::write(hidden.join("SKILL.md"), "# Hidden").unwrap();
+
+    let found = scanner::scan_global(&hub.paths, &[Target::Agents]).unwrap();
+    assert_eq!(found.len(), 1);
+    assert!(found[0].path.ends_with("team/review"));
+}
+
+#[test]
+fn shared_agents_skills_can_be_explicitly_cleared() {
+    let (temp, hub) = fixture();
+    seed(&hub);
+    let host_skill = temp.path().join(".agents/skills/host-only");
+    fs::create_dir_all(&host_skill).unwrap();
+    fs::write(host_skill.join("SKILL.md"), "# Host only").unwrap();
+    let selection = SyncSelection {
+        skills_managed: true,
+        skills: Vec::new(),
+        ..SyncSelection::default()
+    };
+
+    let run =
+        transaction::sync_once(&hub.paths, &hub.store, Target::Agents, Some(&selection)).unwrap();
+    assert!(run.changed);
+    assert!(!temp.path().join(".agents/skills/host-only").exists());
+    assert!(temp.path().join(".agents/skills").is_dir());
+}
+
+#[test]
 fn scanner_reports_invalid_rules_without_allowing_import() {
     let (temp, hub) = fixture();
     let rules = temp.path().join(".claude/rules");
@@ -112,6 +147,140 @@ fn scanner_reports_invalid_rules_without_allowing_import() {
     selected.selected = true;
     assert!(canonical::import_initial_atomic(&hub.paths, &[selected]).is_err());
     assert!(canonical::canonical_dirs_empty(&hub.paths).unwrap());
+}
+
+#[test]
+fn scanner_and_import_keep_each_mcp_server_distinct() {
+    let (temp, hub) = fixture();
+    let cursor = temp.path().join(".cursor");
+    fs::create_dir_all(&cursor).unwrap();
+    fs::write(
+        cursor.join("mcp.json"),
+        r#"{"theme":"night","mcpServers":{"alpha":{"command":"a"},"beta":{"command":"b","args":["--stdio"]}}}"#,
+    )
+    .unwrap();
+
+    let mut found = scanner::scan_global(&hub.paths, &[Target::Cursor]).unwrap();
+    assert_eq!(found.len(), 2);
+    assert_ne!(found[0].digest, found[1].digest);
+    found.iter_mut().for_each(|item| item.selected = true);
+    let imported = canonical::import_initial_atomic(&hub.paths, &found).unwrap();
+    assert_eq!(imported.len(), 2);
+    let ids: Vec<_> = canonical::inventory(&hub.paths)
+        .unwrap()
+        .into_iter()
+        .map(|item| item.id)
+        .collect();
+    assert_eq!(ids, vec!["alpha", "beta"]);
+}
+
+#[test]
+fn host_inventory_is_target_specific_and_cleanup_preserves_other_mcp_servers() {
+    let (temp, hub) = fixture();
+    let cursor = temp.path().join(".cursor");
+    fs::create_dir_all(cursor.join("skills/host-only")).unwrap();
+    fs::write(cursor.join("skills/host-only/SKILL.md"), "# Host only").unwrap();
+    fs::create_dir_all(temp.path().join(".agents/skills/shared")).unwrap();
+    fs::write(
+        temp.path().join(".agents/skills/shared/SKILL.md"),
+        "# Shared",
+    )
+    .unwrap();
+    fs::write(
+        cursor.join("mcp.json"),
+        r#"{"theme":"night","mcpServers":{"alpha":{"command":"a"},"beta":{"command":"b"}}}"#,
+    )
+    .unwrap();
+
+    let items = host::inventory(&hub.paths, Target::Cursor).unwrap();
+    assert!(items.iter().any(|item| item.display_name == "host-only"));
+    assert!(!items.iter().any(|item| item.display_name == "shared"));
+    let alpha = items
+        .iter()
+        .find(|item| item.display_name == "alpha")
+        .unwrap();
+    let result =
+        host::cleanup(&hub.paths, Target::Cursor, std::slice::from_ref(&alpha.id)).unwrap();
+    assert!(result.backup_path.join("manifest.json").is_file());
+    let value: serde_json::Value =
+        serde_json::from_slice(&fs::read(cursor.join("mcp.json")).unwrap()).unwrap();
+    assert_eq!(value["theme"], "night");
+    assert!(value["mcpServers"].get("alpha").is_none());
+    assert!(value["mcpServers"].get("beta").is_some());
+}
+
+#[test]
+fn cursor_plugin_projection_flattens_payload_and_omits_agenthub_manifest() {
+    let (_temp, hub) = fixture();
+    let plugin = hub.paths.plugins.join("portable");
+    fs::create_dir_all(plugin.join("payload/.cursor-plugin")).unwrap();
+    fs::create_dir_all(plugin.join("payload/skills/demo")).unwrap();
+    fs::write(plugin.join("agenthub.plugin.json"), r#"{"schemaVersion":1,"id":"portable","displayName":"Portable","sourceFormat":"cursor","components":[]}"#).unwrap();
+    fs::write(
+        plugin.join("payload/.cursor-plugin/plugin.json"),
+        r#"{"name":"portable"}"#,
+    )
+    .unwrap();
+    fs::write(plugin.join("payload/skills/demo/SKILL.md"), "# Demo").unwrap();
+
+    let domains = adapters::projection(&hub.paths, Target::Cursor).unwrap();
+    let plugins = domains
+        .iter()
+        .find(|domain| domain.name == "plugins")
+        .unwrap();
+    assert!(plugins
+        .files
+        .contains_key(std::path::Path::new("portable/.cursor-plugin/plugin.json")));
+    assert!(plugins
+        .files
+        .contains_key(std::path::Path::new("portable/skills/demo/SKILL.md")));
+    assert!(!plugins
+        .files
+        .keys()
+        .any(|path| path.to_string_lossy().contains("payload")));
+    assert!(!plugins
+        .files
+        .keys()
+        .any(|path| path.ends_with("agenthub.plugin.json")));
+}
+
+#[test]
+fn codex_plugin_store_is_preserved_and_reported_as_constraint() {
+    let (temp, hub) = fixture();
+    let plugin = hub.paths.plugins.join("portable");
+    fs::create_dir_all(plugin.join("payload")).unwrap();
+    fs::write(
+        plugin.join("agenthub.plugin.json"),
+        r#"{"schemaVersion":1,"id":"portable","displayName":"Portable","components":[]}"#,
+    )
+    .unwrap();
+    fs::write(plugin.join("payload/plugin.json"), r#"{"name":"portable"}"#).unwrap();
+    let installed = temp.path().join(".codex/plugins/cache/vendor/plugin/1.0.0");
+    fs::create_dir_all(&installed).unwrap();
+    fs::write(installed.join("state.json"), "keep").unwrap();
+    fs::write(installed.join("plugin.json"), r#"{"name":"plugin"}"#).unwrap();
+
+    let host_plugins = host::inventory(&hub.paths, Target::Codex).unwrap();
+    let cached = host_plugins
+        .iter()
+        .find(|item| item.path == installed)
+        .unwrap();
+    assert_eq!(cached.display_name, "plugin");
+    assert!(!cached.deletable);
+
+    let plan = planner::create(&hub.paths, Target::Codex).unwrap();
+    assert!(plan
+        .warnings
+        .iter()
+        .any(|warning| warning == "codex_plugins_marketplace_managed"));
+    assert!(!plan
+        .steps
+        .iter()
+        .any(|step| step.path.starts_with(temp.path().join(".codex/plugins"))));
+    assert_eq!(
+        fs::read_to_string(installed.join("state.json")).unwrap(),
+        "keep"
+    );
 }
 
 #[test]
@@ -167,6 +336,79 @@ fn plan_is_read_only_and_apply_preserves_unrelated_mcp_settings() {
 }
 
 #[test]
+fn codex_mcp_projection_uses_documented_env_and_http_header_fields() {
+    let (temp, hub) = fixture();
+    seed(&hub);
+    let path = hub.paths.mcp.join("local/server.json");
+    let mut server: McpServer = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    server.env.insert("MODE".into(), "safe".into());
+    server.headers.insert("X-Tenant".into(), "demo".into());
+    server.transport = "http".into();
+    server.command = None;
+    server.args.clear();
+    server.url = Some("https://example.test/mcp".into());
+    fs::write(&path, serde_json::to_vec(&server).unwrap()).unwrap();
+    let stdio_dir = hub.paths.mcp.join("stdio");
+    fs::create_dir_all(&stdio_dir).unwrap();
+    fs::write(
+        stdio_dir.join("server.json"),
+        serde_json::to_vec(&McpServer {
+            schema_version: 1,
+            id: "stdio".into(),
+            display_name: "Stdio".into(),
+            transport: "stdio".into(),
+            command: Some("stdio-server".into()),
+            args: Vec::new(),
+            url: None,
+            env: BTreeMap::from([("MODE".into(), "safe".into())]),
+            headers: BTreeMap::new(),
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    fs::create_dir_all(temp.path().join(".codex")).unwrap();
+    fs::write(
+        temp.path().join(".codex/config.toml"),
+        "model = \"gpt-test\"\n",
+    )
+    .unwrap();
+
+    transaction::sync_once(&hub.paths, &hub.store, Target::Codex, None).unwrap();
+    let config = fs::read_to_string(temp.path().join(".codex/config.toml")).unwrap();
+    assert!(config.contains("model = \"gpt-test\""));
+    assert!(config.contains("http_headers = { X-Tenant = \"demo\" }"));
+    assert_eq!(config.matches("env = { MODE = \"safe\" }").count(), 1);
+}
+
+#[test]
+fn claude_apply_preserves_cli_managed_plugin_store_and_reports_constraint() {
+    let (temp, hub) = fixture();
+    seed(&hub);
+    let canonical_plugin = hub.paths.plugins.join("example");
+    fs::create_dir_all(&canonical_plugin).unwrap();
+    fs::write(
+        canonical_plugin.join("agenthub.plugin.json"),
+        r#"{"schemaVersion":1,"id":"example","displayName":"Example","components":[]}"#,
+    )
+    .unwrap();
+    let installed = temp.path().join(".claude/plugins/cache/vendor/example");
+    fs::create_dir_all(&installed).unwrap();
+    fs::write(installed.join("state.json"), "keep").unwrap();
+
+    let plan = planner::create_with_selection(&hub.paths, Target::Claude, None).unwrap();
+    assert!(plan
+        .warnings
+        .iter()
+        .any(|warning| warning == "claude_plugins_cli_managed"));
+    hub.store.save_plan(&plan).unwrap();
+    transaction::apply(&hub.paths, &hub.store, &plan).unwrap();
+    assert_eq!(
+        fs::read_to_string(installed.join("state.json")).unwrap(),
+        "keep"
+    );
+}
+
+#[test]
 fn manual_rollback_restores_pre_apply_state_and_records_a_new_transaction() {
     let (_temp, hub) = fixture();
     seed(&hub);
@@ -219,6 +461,7 @@ fn selected_sync_scope_only_projects_selected_domains_and_resources() {
         plugins: Vec::new(),
         mcp: Vec::new(),
         rules: false,
+        ..SyncSelection::default()
     };
     let plan =
         planner::create_with_selection(&hub.paths, Target::Cursor, Some(&selection)).unwrap();
@@ -335,7 +578,7 @@ fn rule_editor_writes_canonical_and_git_commit_records_it() {
         display_name: "Team safety".into(),
         activation: "paths".into(),
         paths: vec!["src/**".into()],
-        targets: Target::ALL.to_vec(),
+        targets: Target::HOSTS.to_vec(),
         body: "# Safety\n\nDo not expose secrets.".into(),
     };
     let capability = canonical::save_rule(&hub.paths, &rule, true).unwrap();
@@ -412,6 +655,7 @@ fn automatic_sync_profiles_run_after_mutation_and_skip_noop_transactions() {
         plugins: Vec::new(),
         mcp: Vec::new(),
         rules: false,
+        ..SyncSelection::default()
     };
 
     let first =
@@ -446,6 +690,37 @@ fn automatic_sync_profiles_run_after_mutation_and_skip_noop_transactions() {
 }
 
 #[test]
+fn strict_authority_expands_saved_auto_scope_to_all_canonical_resources() {
+    let (temp, hub) = fixture();
+    seed(&hub);
+    let second = hub.paths.skills.join("second");
+    fs::create_dir_all(&second).unwrap();
+    fs::write(second.join("SKILL.md"), "# Second").unwrap();
+    hub.store
+        .set_auto_sync_profile(&agenthub_core::models::AutoSyncProfile {
+            target: Target::Cursor,
+            enabled: true,
+            selection: SyncSelection {
+                skills_managed: true,
+                skills: vec!["review".into()],
+                ..SyncSelection::default()
+            },
+        })
+        .unwrap();
+    hub.store
+        .set_policy_settings(&agenthub_core::models::PolicySettings {
+            strict_authoritative: true,
+            sync_after_reverse_import: false,
+        })
+        .unwrap();
+
+    let outcomes = transaction::run_auto_sync(&hub.paths, &hub.store).unwrap();
+    assert!(outcomes[0].changed, "{:?}", outcomes[0]);
+    assert!(temp.path().join(".cursor/skills/review/SKILL.md").is_file());
+    assert!(temp.path().join(".cursor/skills/second/SKILL.md").is_file());
+}
+
+#[test]
 fn deleting_canonical_capability_runs_saved_auto_sync_scope() {
     let (_temp, hub) = fixture();
     seed(&hub);
@@ -454,6 +729,7 @@ fn deleting_canonical_capability_runs_saved_auto_sync_scope() {
         plugins: Vec::new(),
         mcp: Vec::new(),
         rules: false,
+        ..SyncSelection::default()
     };
     transaction::sync_once(&hub.paths, &hub.store, Target::Cursor, Some(&selection)).unwrap();
     hub.store

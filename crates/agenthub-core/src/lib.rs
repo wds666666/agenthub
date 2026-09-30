@@ -1,6 +1,7 @@
 pub mod adapters;
 pub mod canonical;
 pub mod git;
+pub mod host;
 pub mod models;
 pub mod paths;
 pub mod planner;

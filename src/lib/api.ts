@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-export type Target = "cursor" | "codex" | "claude";
+export type Target = "agents" | "cursor" | "codex" | "claude";
 export type Kind = "skill" | "mcp" | "plugin" | "rule";
 export interface Capability { id: string; kind: Kind; display_name: string; digest: string; path: string; compatible_targets: Target[] }
 export interface CapabilityDetail { capability: Capability; preview_path: string; preview: string; preview_truncated: boolean; files: Array<{ path: string; size: number }> }
@@ -8,15 +8,20 @@ export interface Transaction { id: string; plan_id: string; target: Target; stat
 export interface SyncRunResult { changed: boolean; plan: Plan; transaction?: Transaction }
 export interface Dashboard { initialized: boolean; inventory: Record<string, number>; enabled_targets: Target[]; auto_sync_targets: Target[]; dirty: boolean; recent_transactions: Transaction[] }
 export interface ScanItem { id: string; kind: Kind; source: string; path: string; digest: string; selected: boolean; importable: boolean; source_key?: string; warning?: string }
+export type HostRelation = "canonical_match" | "host_only" | "constraint";
+export interface HostResource { id: string; target: Target; kind: Kind; display_name: string; path: string; digest: string; relation: HostRelation; canonical_id?: string; deletable: boolean; constraint?: string }
+export interface HostCleanupResult { id: string; deleted: string[]; backup_path: string }
 export interface RuntimeDiagnostics { log_dir: string; canonical_root: string; git_available: boolean; platform: string }
 export interface PlanStep { action: string; capability_kind?: Kind; capability_id?: string; path: string; detail: string }
 export interface PlanCapabilitySummary { kind: Kind; affected: number; create: number; update: number; delete: number; skip: number; files: number }
-export interface SyncSelection { skills: string[]; plugins: string[]; mcp: string[]; rules: boolean }
+export interface SyncSelection { skills_managed: boolean; skills: string[]; plugins_managed: boolean; plugins: string[]; mcp_managed: boolean; mcp: string[]; rules_managed: boolean; rules: boolean; authoritative: boolean }
 export interface AutoSyncProfile { target: Target; enabled: boolean; selection: SyncSelection }
 export interface AutoSyncOutcome { target: Target; changed: boolean; transaction_id?: string; error?: string }
 export interface AutoSyncUpdateResult { profile: AutoSyncProfile; initial_sync?: SyncRunResult }
 export interface CapabilityMutationResult { capability: Capability; auto_sync: AutoSyncOutcome[] }
 export interface CapabilityDeleteResult { id: string; kind: Kind; auto_sync: AutoSyncOutcome[] }
+export interface ScanImportResult { imported: string[]; skipped_duplicates: number; auto_sync: AutoSyncOutcome[] }
+export interface PolicySettings { strict_authoritative: boolean; sync_after_reverse_import: boolean }
 export interface Plan { id: string; target: Target; steps: PlanStep[]; summary: PlanCapabilitySummary[]; selection?: SyncSelection; warnings: string[]; canonical_digest: string; git: { head?: string; dirty: boolean } }
 export interface RuleDocument { schemaVersion: number; id: string; displayName: string; activation: "always" | "manual" | "paths"; paths: string[]; targets: Target[]; body: string }
 export interface GitIdentity { name?: string; email?: string }
@@ -32,6 +37,9 @@ export const api = {
   saveRule: (rule: RuleDocument, create: boolean) => call<CapabilityMutationResult>("save_rule", { rule, create }),
   deleteCapability: (kind: Kind, id: string) => call<CapabilityDeleteResult>("delete_capability", { kind, id }),
   scan: () => call<ScanItem[]>("initial_scan"),
+  hostInventory: (target: Target) => call<HostResource[]>("host_inventory", { target }),
+  cleanupHostResources: (target: Target, selectedIds: string[]) => call<HostCleanupResult>("cleanup_host_resources", { target, selectedIds }),
+  importScanned: (selectedIds: string[]) => call<ScanImportResult>("import_scanned", { selectedIds }),
   finishInit: (selectedIds: string[]) => call<string[]>("finish_init", { selectedIds }),
   discardIncompleteInit: () => call<void>("discard_incomplete_init"),
   resetFailedInitialization: () => call<void>("reset_failed_initialization"),
@@ -39,6 +47,8 @@ export const api = {
   plan: (target: Target, selection?: SyncSelection) => call<Plan>("create_plan", { target, selection }),
   apply: (planId: string) => call<Transaction>("apply_plan", { planId }),
   autoSyncProfiles: () => call<AutoSyncProfile[]>("auto_sync_profiles"),
+  policySettings: () => call<PolicySettings>("policy_settings"),
+  setPolicySettings: (settings: PolicySettings) => call<PolicySettings>("set_policy_settings", { settings }),
   setAutoSync: (target: Target, selection: SyncSelection, enabled: boolean) => call<AutoSyncUpdateResult>("set_auto_sync", { target, selection, enabled }),
   transactionHistory: (limit = 100) => call<Transaction[]>("transaction_history", { limit }),
   rollbackTransaction: (transactionId: string) => call<Transaction>("rollback_transaction", { transactionId }),

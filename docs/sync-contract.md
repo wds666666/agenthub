@@ -20,15 +20,18 @@ Plan presentation must expose a capability-level change list before raw file det
 
 Target Sync begins with a scope selector. Skills, Plugins and MCP servers are selected by Canonical ID; Rules are selected with a target-wide toggle because some adapters render them as a combined file or plugin. A selected domain is replaced from its selected Canonical subset, so host extras in that domain appear as deletes. A domain with no selected resources is omitted from the projection and is not touched. Rules disabled omits the Rules projection entirely. The selection snapshot is persisted in the Plan and is part of the Apply contract.
 
+Each list domain also carries an explicit managed flag. This separates "do not touch" from "manage with an empty desired set". The latter produces deletion steps and is how a user intentionally clears `~/.agents/skills` or another writable host domain. Legacy selections remain managed whenever they contain selected IDs.
+
 The automatic-sync profile uses the same visible selector. The UI shows the saved target scope and requires the user to review named Skills, Plugins, MCP servers and the Rules toggle when enabling or changing it; automatic sync is never represented as an opaque all-capabilities switch.
 
 ## Target domains
 
 | Target | Skills | MCP | Plugins | Rules |
 | --- | --- | --- | --- | --- |
+| Shared Agents | replace or explicitly clear `~/.agents/skills` | unsupported | unsupported | unsupported |
 | Cursor | replace `~/.cursor/skills` | replace `mcpServers`, preserve other JSON | replace writable local plugins | generated global plugin |
-| Codex | replace `~/.codex/skills` | replace `mcp_servers`, preserve other TOML | replace writable user plugins | replace global `AGENTS.md` |
-| Claude | replace writable `~/.claude/skills` except reserved dirs | replace user-scope servers | replace writable user plugins | replace `~/.claude/rules` |
+| Codex | replace `~/.codex/skills` | replace `mcp_servers`, preserve other TOML | preserve CLI/marketplace-managed state and report v0.1 constraint | replace global `AGENTS.md` |
+| Claude | replace writable `~/.claude/skills` except reserved dirs | replace user-scope servers | preserve CLI-managed plugin store and report v0.1 constraint | replace `~/.claude/rules` |
 
 Before writing, the executor resolves all paths and records type, mode, hash and symlink target. It then creates a complete transaction backup, writes the projection, reads the target again and compares it with Expected State. Verification failure automatically restores the backup. Cleanup is manual and warns that rollback ability will be lost.
 
@@ -41,3 +44,19 @@ Manual rollback is a new audited transaction, not a mutation of the historical A
 Rollback never changes Canonical files or Git history. The restored host can therefore intentionally drift from Canonical, and the next Plan must show that drift before another Apply. The desktop confirmation names the target and full transaction ID and labels the action as restoring the state before that Apply.
 
 `scan` is an import discovery operation only before initialization. Afterwards it is a read-only drift audit; it never merges or imports host changes.
+
+The desktop exposes a separate **Scan and import** action after initialization. Discovery is read-only; exact `(kind, digest)` duplicates already in Canonical are disabled, duplicates across hosts are grouped, and only explicit confirmation imports selected candidates. Import is a Canonical mutation; it triggers saved automatic-sync profiles only when the user has enabled the separate “sync after reverse import” policy.
+
+## Enforcement policy
+
+The default policy is scoped: only explicitly managed domains are replaced. Optional strict-authoritative mode makes every adapter-confirmed writable domain for the selected target managed, including empty domains. It never expands into models, themes, accounts, permissions, cloud-managed capabilities, organization policy, reserved vendor directories, or undocumented plugin storage. Every strict write still uses Plan, backup, Apply and verification.
+
+Post-initialization reverse import is a separate user action. Exact `(kind, digest)` duplicates are skipped and all selected items are staged and validated before Canonical activation. By default it does not write back to any host. Users may explicitly enable “sync after reverse import”; when enabled, only already-enabled automatic-sync profiles run, and unchanged targets create no transaction.
+
+## Host inventory and cleanup
+
+The Host Resources page is diagnostic and operational, not another source of truth. It scans only the documented user-global allowlist and labels every item as `canonical_match`, `host_only`, or `constraint`. A Canonical match means the host item corresponds to current Canonical content; it is not an ownership marker. Deleting such an item creates drift and an enabled automatic profile may recreate it after the next AgentHub mutation.
+
+Cleanup is always a separate explicit transaction. The user selects exact resources, reviews their target, kind, name and path, and confirms deletion. Before mutation AgentHub re-scans the target and rejects stale or non-deletable IDs, then backs up all unique affected paths. Standalone Skills, writable Rules and recognized Cursor local plugins may be deleted directly. MCP cleanup removes only the selected server entry and preserves every unrelated key in the host configuration. Claude Code plugin storage and Codex marketplace/cache/plugin state are protected constraints in v0.1 and never expose a raw delete action.
+
+Cleanup never changes Canonical. Failure restores the pre-cleanup backup automatically. A successful cleanup reports the backup location and leaves any resulting drift visible; it does not silently trigger synchronization.

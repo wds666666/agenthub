@@ -61,11 +61,16 @@ pub fn sync_once(
 
 pub fn run_auto_sync(paths: &AgentHubPaths, store: &Store) -> Result<Vec<AutoSyncOutcome>> {
     let profiles = store.auto_sync_profiles()?;
+    let strict_authoritative = store.policy_settings()?.strict_authoritative;
     Ok(profiles
         .into_iter()
         .filter(|profile| profile.enabled)
-        .map(
-            |profile| match sync_once(paths, store, profile.target, Some(&profile.selection)) {
+        .map(|profile| {
+            let mut selection = profile.selection;
+            if strict_authoritative {
+                selection.authoritative = true;
+            }
+            match sync_once(paths, store, profile.target, Some(&selection)) {
                 Ok(result) => AutoSyncOutcome {
                     target: profile.target,
                     changed: result.changed,
@@ -78,8 +83,8 @@ pub fn run_auto_sync(paths: &AgentHubPaths, store: &Store) -> Result<Vec<AutoSyn
                     transaction_id: None,
                     error: Some(crate::secrets::redact(&format!("{error:#}"))),
                 },
-            },
-        )
+            }
+        })
         .collect())
 }
 

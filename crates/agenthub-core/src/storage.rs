@@ -1,4 +1,4 @@
-use crate::models::{AutoSyncProfile, Plan, SyncSelection, Target, Transaction};
+use crate::models::{AutoSyncProfile, Plan, PolicySettings, SyncSelection, Target, Transaction};
 use anyhow::Result;
 use rusqlite::{params, Connection, OptionalExtension};
 use std::{path::Path, sync::Mutex};
@@ -47,6 +47,14 @@ impl Store {
     pub fn set_meta(&self, key: &str, value: &str) -> Result<()> {
         self.conn().execute("INSERT INTO meta(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", params![key,value])?;
         Ok(())
+    }
+    pub fn policy_settings(&self) -> Result<PolicySettings> {
+        self.meta("policy_settings")?
+            .map(|value| serde_json::from_str(&value).map_err(Into::into))
+            .unwrap_or_else(|| Ok(PolicySettings::default()))
+    }
+    pub fn set_policy_settings(&self, settings: &PolicySettings) -> Result<()> {
+        self.set_meta("policy_settings", &serde_json::to_string(settings)?)
     }
     pub fn set_target(&self, target: Target, enabled: bool) -> Result<()> {
         self.conn().execute("INSERT INTO targets(target,enabled) VALUES(?1,?2) ON CONFLICT(target) DO UPDATE SET enabled=excluded.enabled", params![target.as_str(), enabled])?;

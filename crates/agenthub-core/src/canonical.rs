@@ -87,7 +87,11 @@ fn collect_dirs(root: &Path, kind: CapabilityKind, out: &mut Vec<Capability>) ->
             display_name,
             digest: tree_digest(&path)?,
             path,
-            compatible_targets: Target::ALL.to_vec(),
+            compatible_targets: if kind == CapabilityKind::Skill {
+                Target::ALL.to_vec()
+            } else {
+                Target::HOSTS.to_vec()
+            },
         });
     }
     Ok(())
@@ -266,6 +270,12 @@ pub fn validate_rule(rule: &RuleDocument) -> Result<()> {
     anyhow::ensure!(!rule.body.trim().is_empty(), "rule body is required");
     anyhow::ensure!(rule.body.len() <= 1_000_000, "rule body is too large");
     anyhow::ensure!(!rule.targets.is_empty(), "at least one target is required");
+    anyhow::ensure!(
+        rule.targets
+            .iter()
+            .all(|target| Target::HOSTS.contains(target)),
+        "Rules are not supported by the shared Agents target"
+    );
     for path in &rule.paths {
         anyhow::ensure!(
             !path.trim().is_empty() && path.len() <= 500,
@@ -425,9 +435,10 @@ pub fn import_scan_items(paths: &AgentHubPaths, items: &[ScanItem]) -> Result<Ve
             continue;
         }
         let base = item
-            .path
-            .file_stem()
-            .and_then(|s| s.to_str())
+            .source_key
+            .as_deref()
+            .and_then(|key| key.strip_prefix("server:"))
+            .or_else(|| item.path.file_stem().and_then(|s| s.to_str()))
             .unwrap_or(item.kind.as_str());
         let id = unique_id(paths, item.kind, &slug(base));
         (|| -> Result<()> {
@@ -492,6 +503,35 @@ pub fn import_initial_atomic(paths: &AgentHubPaths, items: &[ScanItem]) -> Resul
     let result = (|| -> Result<Vec<String>> {
         let imported = import_scan_items(&stage, items)?;
         inventory(&stage).context("staged Canonical validation failed")?;
+        replace_canonical_dirs(paths, &stage, &stage_root)?;
+        Ok(imported)
+    })();
+    let _ = fs::remove_dir_all(&stage_root);
+    result
+}
+
+pub fn import_scan_items_atomic(paths: &AgentHubPaths, items: &[ScanItem]) -> Result<Vec<String>> {
+    let stage_root = paths
+        .root
+        .join("runtime")
+        .join(format!("reverse-import-{}", uuid::Uuid::new_v4()));
+    let stage = AgentHubPaths::new(paths.user_home.clone(), stage_root.clone());
+    fs::create_dir_all(&stage_root)?;
+    for (source, destination) in [
+        (&paths.skills, &stage.skills),
+        (&paths.plugins, &stage.plugins),
+        (&paths.rules, &stage.rules),
+        (&paths.mcp, &stage.mcp),
+    ] {
+        if source.exists() {
+            copy_checked(source, destination)?;
+        } else {
+            fs::create_dir_all(destination)?;
+        }
+    }
+    let result = (|| -> Result<Vec<String>> {
+        let imported = import_scan_items(&stage, items)?;
+        inventory(&stage).context("reverse-import Canonical validation failed")?;
         replace_canonical_dirs(paths, &stage, &stage_root)?;
         Ok(imported)
     })();
@@ -757,7 +797,12 @@ fn import_mcp(paths: &AgentHubPaths, item: &ScanItem, id: &str) -> Result<()> {
     } else {
         value.get("type").and_then(|v| v.as_str()).unwrap_or("http")
     };
-    let server = serde_json::json!({"schemaVersion":1,"id":id,"display_name":name,"transport":transport,"command":value.get("command"),"args":value.get("args").cloned().unwrap_or_else(||serde_json::json!([])),"url":value.get("url"),"env":value.get("env").cloned().unwrap_or_else(||serde_json::json!({})),"headers":value.get("headers").cloned().unwrap_or_else(||serde_json::json!({}))});
+    let headers = value
+        .get("headers")
+        .or_else(|| value.get("http_headers"))
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let server = serde_json::json!({"schemaVersion":1,"id":id,"display_name":name,"transport":transport,"command":value.get("command"),"args":value.get("args").cloned().unwrap_or_else(||serde_json::json!([])),"url":value.get("url"),"env":value.get("env").cloned().unwrap_or_else(||serde_json::json!({})),"headers":headers});
     let dest = paths.mcp.join(id);
     fs::create_dir_all(&dest)?;
     fs::write(

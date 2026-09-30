@@ -6,6 +6,30 @@ import { t } from "../lib/i18n";
 
 type ButtonVariant = "primary" | "secondary" | "danger" | "quiet";
 
+let bodyScrollLockCount = 0;
+let bodyOverflowBeforeLock = "";
+let inertRootLockCount = 0;
+
+function acquireDialogBoundary() {
+  const background = document.getElementById("root");
+  if (bodyScrollLockCount === 0) {
+    bodyOverflowBeforeLock = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+  }
+  bodyScrollLockCount += 1;
+  inertRootLockCount += 1;
+  if (background) background.inert = true;
+  return () => {
+    bodyScrollLockCount = Math.max(0, bodyScrollLockCount - 1);
+    inertRootLockCount = Math.max(0, inertRootLockCount - 1);
+    if (bodyScrollLockCount === 0) {
+      document.body.style.overflow = bodyOverflowBeforeLock;
+      bodyOverflowBeforeLock = "";
+    }
+    if (background && inertRootLockCount === 0) background.inert = false;
+  };
+}
+
 export function Button({
   variant = "primary",
   className = "",
@@ -108,10 +132,7 @@ export function Dialog({
   useEffect(() => {
     if (!open) return;
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const background = document.getElementById("root");
-    const previousOverflow = document.body.style.overflow;
-    if (background) background.inert = true;
-    document.body.style.overflow = "hidden";
+    const releaseBoundary = acquireDialogBoundary();
     const frame = closeRef.current?.closest<HTMLElement>("[role='dialog']");
     const focusable = () => Array.from(frame?.querySelectorAll<HTMLElement>("button:not([disabled]), input:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])") ?? []);
     (frame?.querySelector<HTMLElement>("[data-autofocus]") ?? closeRef.current)?.focus();
@@ -133,8 +154,7 @@ export function Dialog({
     window.addEventListener("keydown", onKey);
     return () => {
       window.removeEventListener("keydown", onKey);
-      if (background) background.inert = false;
-      document.body.style.overflow = previousOverflow;
+      releaseBoundary();
       previous?.focus();
     };
   }, [open, title]);

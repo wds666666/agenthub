@@ -1,6 +1,6 @@
 use crate::{
     adapters::{actual_files, projection_with_selection},
-    canonical::{canonical_digest, sha256},
+    canonical::{canonical_digest, inventory, sha256},
     git,
     models::{
         CapabilityKind, Plan, PlanAction, PlanCapabilitySummary, PlanStep, SyncSelection, Target,
@@ -93,6 +93,22 @@ pub fn create_with_selection(
     let domains = projection_with_selection(paths, target, selection)?;
     let mut steps = Vec::new();
     let mut warnings = Vec::new();
+    if target == Target::Claude
+        && selection.is_none_or(SyncSelection::manages_plugins)
+        && inventory(paths)?
+            .iter()
+            .any(|item| item.kind == CapabilityKind::Plugin)
+    {
+        warnings.push("claude_plugins_cli_managed".into());
+    }
+    if target == Target::Codex
+        && selection.is_none_or(SyncSelection::manages_plugins)
+        && inventory(paths)?
+            .iter()
+            .any(|item| item.kind == CapabilityKind::Plugin)
+    {
+        warnings.push("codex_plugins_marketplace_managed".into());
+    }
     let mut expected = Sha256::new();
     let mut presence = BTreeMap::new();
     let mut changed_files = BTreeMap::new();

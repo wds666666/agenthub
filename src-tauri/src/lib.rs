@@ -1,9 +1,10 @@
 use agenthub_core::{
-    canonical, git,
+    canonical, git, host,
     models::{
         AutoSyncProfile, AutoSyncUpdateResult, CapabilityDeleteResult, CapabilityDetail,
-        CapabilityKind, CapabilityMutationResult, Dashboard, GitIdentity, Plan, RuleDocument,
-        ScanItem, SyncSelection, Target, Transaction,
+        CapabilityKind, CapabilityMutationResult, Dashboard, GitIdentity, HostCleanupResult,
+        HostResource, Plan, PolicySettings, RuleDocument, ScanImportResult, ScanItem,
+        SyncSelection, Target, Transaction,
     },
     planner, scanner, transaction, AgentHub,
 };
@@ -144,7 +145,16 @@ fn save_rule(rule: RuleDocument, create: bool) -> Result<CapabilityMutationResul
         format_args!("id={}", rule.id),
     );
     let capability = result?;
-    let auto_sync = transaction::run_auto_sync(&h.paths, &h.store).map_err(err)?;
+    let auto_sync = if h
+        .store
+        .policy_settings()
+        .map_err(err)?
+        .sync_after_reverse_import
+    {
+        transaction::run_auto_sync(&h.paths, &h.store).map_err(err)?
+    } else {
+        Vec::new()
+    };
     trace(
         "rules",
         "auto_sync_complete",
@@ -209,6 +219,78 @@ fn initial_scan() -> Result<Vec<ScanItem>, String> {
         ),
     );
     Ok(items)
+}
+
+#[tauri::command(async)]
+fn host_inventory(target: Target) -> Result<Vec<HostResource>, String> {
+    let h = hub()?;
+    host::inventory(&h.paths, target).map_err(err)
+}
+
+#[tauri::command(async)]
+fn cleanup_host_resources(
+    target: Target,
+    selected_ids: Vec<String>,
+) -> Result<HostCleanupResult, String> {
+    trace(
+        "host",
+        "cleanup_start",
+        format_args!("target={} count={}", target.as_str(), selected_ids.len()),
+    );
+    let h = hub()?;
+    let result = host::cleanup(&h.paths, target, &selected_ids).map_err(err)?;
+    trace(
+        "host",
+        "cleanup_complete",
+        format_args!(
+            "target={} id={} count={}",
+            target.as_str(),
+            result.id,
+            result.deleted.len()
+        ),
+    );
+    Ok(result)
+}
+
+#[tauri::command(async)]
+fn import_scanned(selected_ids: Vec<String>) -> Result<ScanImportResult, String> {
+    let h = hub()?;
+    if !h.store.initialized().map_err(err)? {
+        return Err("AgentHub must be initialized before reverse import".into());
+    }
+    let requested: std::collections::BTreeSet<_> = selected_ids.into_iter().collect();
+    let mut items = scanner::scan_global(&h.paths, &Target::ALL).map_err(err)?;
+    let matched = items
+        .iter()
+        .filter(|item| requested.contains(&item.id))
+        .count();
+    if matched != requested.len() {
+        return Err("scan result changed; scan again before importing".into());
+    }
+    let canonical_digests: std::collections::BTreeSet<_> = canonical::inventory(&h.paths)
+        .map_err(err)?
+        .into_iter()
+        .map(|item| (item.kind, item.digest))
+        .collect();
+    let mut seen_digests = canonical_digests.clone();
+    let mut skipped_duplicates = 0;
+    for item in &mut items {
+        let requested_item = requested.contains(&item.id);
+        let identity = (item.kind, item.digest.clone());
+        item.selected = requested_item && item.importable && seen_digests.insert(identity);
+        if requested_item && !item.selected {
+            skipped_duplicates += 1;
+        }
+    }
+    let selected_count = items.iter().filter(|item| item.selected).count();
+    let imported = canonical::import_scan_items_atomic(&h.paths, &items).map_err(err)?;
+    skipped_duplicates += selected_count.saturating_sub(imported.len());
+    let auto_sync = transaction::run_auto_sync(&h.paths, &h.store).map_err(err)?;
+    Ok(ScanImportResult {
+        imported,
+        skipped_duplicates,
+        auto_sync,
+    })
 }
 #[tauri::command(async)]
 fn finish_init(selected_ids: Vec<String>) -> Result<Vec<String>, String> {
@@ -289,6 +371,12 @@ fn set_target(target: Target, enabled: bool) -> Result<(), String> {
 fn create_plan(target: Target, selection: Option<SyncSelection>) -> Result<Plan, String> {
     trace("plan", "create_start", target.as_str());
     let h = hub()?;
+    let mut selection = selection;
+    if h.store.policy_settings().map_err(err)?.strict_authoritative {
+        selection
+            .get_or_insert_with(SyncSelection::default)
+            .authoritative = true;
+    }
     let p = planner::create_with_selection(&h.paths, target, selection.as_ref()).map_err(err)?;
     h.store.save_plan(&p).map_err(err)?;
     trace(
@@ -326,6 +414,17 @@ fn auto_sync_profiles() -> Result<Vec<AutoSyncProfile>, String> {
     h.store.auto_sync_profiles().map_err(err)
 }
 #[tauri::command(async)]
+fn policy_settings() -> Result<PolicySettings, String> {
+    hub()?.store.policy_settings().map_err(err)
+}
+
+#[tauri::command(async)]
+fn set_policy_settings(settings: PolicySettings) -> Result<PolicySettings, String> {
+    let h = hub()?;
+    h.store.set_policy_settings(&settings).map_err(err)?;
+    Ok(settings)
+}
+#[tauri::command(async)]
 fn set_auto_sync(
     target: Target,
     selection: SyncSelection,
@@ -337,6 +436,10 @@ fn set_auto_sync(
         format_args!("target={} enabled={enabled}", target.as_str()),
     );
     let h = hub()?;
+    let mut selection = selection;
+    if h.store.policy_settings().map_err(err)?.strict_authoritative {
+        selection.authoritative = true;
+    }
     let profile = AutoSyncProfile {
         target,
         enabled,
@@ -350,10 +453,10 @@ fn set_auto_sync(
             initial_sync: None,
         });
     }
-    let has_scope = !profile.selection.skills.is_empty()
-        || !profile.selection.plugins.is_empty()
-        || !profile.selection.mcp.is_empty()
-        || profile.selection.rules;
+    let has_scope = profile.selection.manages_skills()
+        || profile.selection.manages_plugins()
+        || profile.selection.manages_mcp()
+        || profile.selection.manages_rules();
     if !has_scope {
         return Err("select at least one capability before enabling automatic sync".into());
     }
@@ -471,6 +574,9 @@ pub fn run() {
             save_rule,
             delete_capability,
             initial_scan,
+            host_inventory,
+            cleanup_host_resources,
+            import_scanned,
             finish_init,
             discard_incomplete_init,
             reset_failed_initialization,
@@ -478,6 +584,8 @@ pub fn run() {
             create_plan,
             apply_plan,
             auto_sync_profiles,
+            policy_settings,
+            set_policy_settings,
             set_auto_sync,
             transaction_history,
             rollback_transaction,

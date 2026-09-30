@@ -24,15 +24,23 @@ impl CapabilityKind {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "lowercase")]
 pub enum Target {
+    Agents,
     Cursor,
     Codex,
     Claude,
 }
 
 impl Target {
-    pub const ALL: [Target; 3] = [Target::Cursor, Target::Codex, Target::Claude];
+    pub const ALL: [Target; 4] = [
+        Target::Agents,
+        Target::Cursor,
+        Target::Codex,
+        Target::Claude,
+    ];
+    pub const HOSTS: [Target; 3] = [Target::Cursor, Target::Codex, Target::Claude];
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Agents => "agents",
             Self::Cursor => "cursor",
             Self::Codex => "codex",
             Self::Claude => "claude",
@@ -44,6 +52,7 @@ impl std::str::FromStr for Target {
     type Err = anyhow::Error;
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
+            "agents" => Ok(Self::Agents),
             "cursor" => Ok(Self::Cursor),
             "codex" => Ok(Self::Codex),
             "claude" => Ok(Self::Claude),
@@ -112,6 +121,35 @@ pub struct ScanItem {
     pub warning: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HostResourceRelation {
+    CanonicalMatch,
+    HostOnly,
+    Constraint,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HostResource {
+    pub id: String,
+    pub target: Target,
+    pub kind: CapabilityKind,
+    pub display_name: String,
+    pub path: PathBuf,
+    pub digest: String,
+    pub relation: HostResourceRelation,
+    pub canonical_id: Option<String>,
+    pub deletable: bool,
+    pub constraint: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HostCleanupResult {
+    pub id: String,
+    pub deleted: Vec<String>,
+    pub backup_path: PathBuf,
+}
+
 fn default_true() -> bool {
     true
 }
@@ -152,13 +190,38 @@ pub struct PlanCapabilitySummary {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct SyncSelection {
     #[serde(default)]
+    pub skills_managed: bool,
+    #[serde(default)]
     pub skills: Vec<String>,
+    #[serde(default)]
+    pub plugins_managed: bool,
     #[serde(default)]
     pub plugins: Vec<String>,
     #[serde(default)]
+    pub mcp_managed: bool,
+    #[serde(default)]
     pub mcp: Vec<String>,
     #[serde(default)]
+    pub rules_managed: bool,
+    #[serde(default)]
     pub rules: bool,
+    #[serde(default)]
+    pub authoritative: bool,
+}
+
+impl SyncSelection {
+    pub fn manages_skills(&self) -> bool {
+        self.authoritative || self.skills_managed || !self.skills.is_empty()
+    }
+    pub fn manages_plugins(&self) -> bool {
+        self.authoritative || self.plugins_managed || !self.plugins.is_empty()
+    }
+    pub fn manages_mcp(&self) -> bool {
+        self.authoritative || self.mcp_managed || !self.mcp.is_empty()
+    }
+    pub fn manages_rules(&self) -> bool {
+        self.authoritative || self.rules_managed || self.rules
+    }
 }
 impl Default for PlanCapabilitySummary {
     fn default() -> Self {
@@ -260,6 +323,21 @@ pub struct CapabilityDeleteResult {
     pub id: String,
     pub kind: CapabilityKind,
     pub auto_sync: Vec<AutoSyncOutcome>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ScanImportResult {
+    pub imported: Vec<String>,
+    pub skipped_duplicates: usize,
+    pub auto_sync: Vec<AutoSyncOutcome>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct PolicySettings {
+    #[serde(default)]
+    pub strict_authoritative: bool,
+    #[serde(default)]
+    pub sync_after_reverse_import: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
