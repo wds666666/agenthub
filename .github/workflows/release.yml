@@ -60,11 +60,11 @@ jobs:
       - name: Install Tauri CLI
         run: |
           set -euo pipefail
-          mkdir -p "$HOME/.local/bin"
+          mkdir -p "$HOME/.local/bin" /tmp/cargo-tauri-extract
           curl -fsSL -o /tmp/cargo-tauri.tgz \
             https://github.com/tauri-apps/tauri/releases/download/tauri-cli-v2.12.0/cargo-tauri-x86_64-unknown-linux-gnu.tgz
-          tar -xzf /tmp/cargo-tauri.tgz -C /tmp
-          bin="$(find /tmp -maxdepth 3 -type f -name cargo-tauri -print -quit)"
+          tar -xzf /tmp/cargo-tauri.tgz -C /tmp/cargo-tauri-extract
+          bin="$(find /tmp/cargo-tauri-extract -type f -name cargo-tauri -print -quit)"
           test -n "$bin"
           install -m 0755 "$bin" "$HOME/.local/bin/cargo-tauri"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
