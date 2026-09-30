@@ -305,7 +305,10 @@ code, pre { font-family: var(--mono); font-variant-ligatures: none; }
 .host-resource__copy small { color: var(--ink-secondary); font-size: 10px; }
 .host-cleanup-bar { position: sticky; z-index: 20; bottom: 16px; display: flex; align-items: center; justify-content: space-between; gap: 20px; max-width: 1120px; margin: -74px auto 0; padding: 13px 14px 13px 18px; border: 1px solid var(--line-strong); border-radius: 18px; background: color-mix(in srgb, var(--surface) 92%, transparent); box-shadow: var(--shadow-lg); backdrop-filter: blur(18px); }
 .host-cleanup-bar div { display: grid; gap: 2px; }
-.host-cleanup-bar span { color: var(--ink-tertiary); font-size: 11px; }
+.host-cleanup-bar div span { color: var(--ink-tertiary); font-size: 11px; }
+.host-cleanup-bar__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.confirm-ack { display: flex; align-items: flex-start; gap: 10px; min-height: 44px; margin-top: 14px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; color: var(--ink-secondary); font-size: 12px; line-height: 1.5; cursor: pointer; }
+.confirm-ack input { flex: none; width: 18px; height: 18px; margin-top: 1px; accent-color: var(--red, #d33); }
 .host-delete-preview { display: grid; gap: 6px; max-height: 250px; overflow: auto; margin-top: 14px; }
 .host-delete-preview > span { display: grid; gap: 3px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-muted); }
 .host-delete-preview code { color: var(--ink-tertiary); font-size: 10px; }

@@ -59,4 +59,6 @@ The Host Resources page is diagnostic and operational, not another source of tru
 
 Cleanup is always a separate explicit transaction. The user selects exact resources, reviews their target, kind, name and path, and confirms deletion. Before mutation AgentHub re-scans the target and rejects stale or non-deletable IDs, then backs up all unique affected paths. Standalone Skills, writable Rules and recognized Cursor local plugins may be deleted directly. MCP cleanup removes only the selected server entry and preserves every unrelated key in the host configuration. Claude Code plugin storage and Codex marketplace/cache/plugin state are protected constraints in v0.1 and never expose a raw delete action.
 
+The desktop may offer a one-click pre-selection of every `host_only` deletable resource for the current target (“not imported into AgentHub”). It is only a selection shortcut: the same review list, explicit acknowledgement and cleanup transaction apply, and Canonical matches or constraints are never included.
+
 Cleanup never changes Canonical. Failure restores the pre-cleanup backup automatically. A successful cleanup reports the backup location and leaves any resulting drift visible; it does not silently trigger synchronization.
