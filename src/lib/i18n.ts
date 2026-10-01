@@ -61,8 +61,8 @@ const workflowMessages = {
       "connect": "验证并连接仓库",
       "synced": "远端版本已合并并上传",
       "localSaved": "版本已保存在本机。",
-      "retryHint": "认证失败请更新系统 Git 凭据或 SSH Agent 后重试；发生冲突时请先协调两台设备上的同一资源修改。本地版本已保留，可再次点击“同步远端”。",
-      "remoteScope": "仅同步能力库和版本记录。工具配置、账户、密钥、备份和同步记录留在本机；接收远端后，请预览并同步到工具。首次使用另一台设备，请先保存本机版本再同步。"
+      "retryHint": "认证失败请更新系统 Git 凭据或 SSH Agent 后重试；发生冲突时请先协调两台设备上的同一资源修改。本地内容会保留，可再次点击“同步远端”。",
+      "remoteScope": "仅同步能力库和版本记录。工具配置、登录凭据、密钥目录、备份和同步记录留在本机；可识别的 MCP 明文凭据会阻止上传，请先改为环境变量引用并清理敏感历史；接收远端后，请预览并同步到工具。首次使用另一台设备，请先保存本机版本再同步。"
     },
     "settings": {
       "recoveryLocation": "重置前的完整恢复副本：",
@@ -94,7 +94,7 @@ const workflowMessages = {
       "synced": "Remote versions merged and uploaded",
       "localSaved": "Version saved on this device.",
       "retryHint": "For authentication failures, update system Git credentials or your SSH agent. For conflicts, reconcile edits to the same resource across devices. Your local version is preserved; retry with Sync remote.",
-      "remoteScope": "Only the library and versions are shared. Tool settings, accounts, keys, backups and sync history stay local. Preview and sync received resources to tools explicitly. Save a local version before syncing a new device."
+      "remoteScope": "Only the library and versions are shared. Tool settings, login credentials, key directories, backups and sync history stay local. Recognizable plaintext MCP credentials block uploading; use environment references and remove sensitive history first. Preview and sync received resources to tools explicitly. Save a local version before syncing a new device."
     },
     "settings": {
       "recoveryLocation": "Complete recovery copy from before reset:",

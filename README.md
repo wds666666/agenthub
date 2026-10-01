@@ -37,3 +37,5 @@ The reusable external-agent integration is in [`skills/agenthub-manager`](skills
 合并及凭据处理参考 [Git merge](https://git-scm.com/docs/git-merge) 和 [Git credentials](https://git-scm.com/docs/gitcredentials)。
 
 CLI 同样支持 `agenthub git connect <url> --branch main`、`git remote-status`、`git sync` 和 `git disconnect`。`git commit` 返回 JSON，区分本机保存成功与远端同步失败。
+
+上传会检查版本历史中的运行目录及可识别的 MCP/JSON 明文凭据；发现后仅显示路径并阻止上传。仅删除当前文件中的密钥不足以清除历史，需先处理敏感历史。任意 Markdown 或二进制中嵌入的秘密无法完全自动识别，请在共享前检查库内容。

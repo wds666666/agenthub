@@ -319,6 +319,110 @@ fn reconcile(root: &Path, url: &str, branch: &str) -> Result<()> {
     }
     Ok(())
 }
+
+fn credential_name(name: &str) -> bool {
+    let name = name.to_ascii_lowercase().replace('-', "_");
+    [
+        "token",
+        "secret",
+        "password",
+        "authorization",
+        "api_key",
+        "apikey",
+        "private_key",
+        "access_key",
+        "credential",
+    ]
+    .iter()
+    .any(|key| name.contains(key))
+        || name.ends_with("_key")
+}
+fn placeholder(value: &str) -> bool {
+    let value = value
+        .strip_prefix("Bearer ")
+        .or_else(|| value.strip_prefix("Basic "))
+        .unwrap_or(value);
+    value.is_empty()
+        || (value.starts_with("${") && value.ends_with('}'))
+        || value.starts_with("env:")
+        || value.starts_with("secret://")
+}
+fn has_plaintext_credentials(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Object(object) => object.iter().any(|(key, value)| {
+            if credential_name(key) && value.as_str().is_some_and(|text| !placeholder(text)) {
+                return true;
+            }
+            if key == "url"
+                && value.as_str().is_some_and(|url| {
+                    let rest = url.split_once("://").map(|(_, rest)| rest).unwrap_or(url);
+                    rest.split('/').next().unwrap_or("").contains('@')
+                        || url.split_once('?').is_some_and(|(_, query)| {
+                            query
+                                .split('&')
+                                .any(|part| credential_name(part.split('=').next().unwrap_or("")))
+                        })
+                })
+            {
+                return true;
+            }
+            if key == "args"
+                && value.as_array().is_some_and(|args| {
+                    args.iter().enumerate().any(|(index, arg)| {
+                        let Some(arg) = arg.as_str() else {
+                            return false;
+                        };
+                        if !arg.starts_with('-')
+                            || !credential_name(arg.split('=').next().unwrap_or(""))
+                        {
+                            return false;
+                        }
+                        arg.split_once('=')
+                            .map(|(_, text)| !placeholder(text))
+                            .unwrap_or_else(|| {
+                                args.get(index + 1)
+                                    .and_then(|value| value.as_str())
+                                    .is_some_and(|text| !placeholder(text))
+                            })
+                    })
+                })
+            {
+                return true;
+            }
+            has_plaintext_credentials(value)
+        }),
+        serde_json::Value::Array(array) => array.iter().any(has_plaintext_credentials),
+        _ => false,
+    }
+}
+/// Check history as well as HEAD: deleting a token in a later version does not remove it from a push.
+fn check_upload_history(root: &Path) -> Result<()> {
+    let objects = run(root, &["rev-list", "--objects", "HEAD"])?;
+    for line in objects.lines() {
+        let Some((object, path)) = line.split_once(' ') else {
+            continue;
+        };
+        if path.is_empty() {
+            continue;
+        }
+        let allowed = path == "agenthub.toml"
+            || path == ".gitignore"
+            || ["skills", "plugins", "rules", "mcp"]
+                .iter()
+                .any(|domain| path == *domain || path.starts_with(&format!("{domain}/")));
+        anyhow::ensure!(allowed, "remote upload blocked: version history contains a non-library path ({path}); use a clean dedicated library history");
+        if !path.ends_with(".json") {
+            continue;
+        }
+        let content = run(root, &["cat-file", "blob", object])?;
+        let value: serde_json::Value = serde_json::from_str(&content).with_context(|| {
+            format!("remote upload blocked: cannot inspect configuration at {path}")
+        })?;
+        anyhow::ensure!(!has_plaintext_credentials(&value), "remote upload blocked: plaintext credentials in version history at {path}; replace with environment placeholders and remove sensitive historical versions before sharing");
+    }
+    Ok(())
+}
+
 pub fn sync_remote(root: &Path) -> Result<()> {
     let settings = remote_settings(root)?;
     let url = settings.url.context("connect a repository first")?;
@@ -331,12 +435,15 @@ pub fn sync_remote(root: &Path) -> Result<()> {
         snapshot(root)?.head.is_some(),
         "save a local version before remote sync"
     );
+    check_upload_history(root)?;
     let destination = format!("HEAD:refs/heads/{}", settings.branch);
     reconcile(root, &url, &settings.branch)?;
+    check_upload_history(root)?;
     if let Err(first) = run(root, &["push", &url, &destination]) {
         // Only retry a remote race; authentication and network failures remain actionable.
         if first.to_string().contains("[rejected]") {
             reconcile(root, &url, &settings.branch)?;
+            check_upload_history(root)?;
             run(root, &["push", &url, &destination])?;
         } else {
             return Err(first);
@@ -491,5 +598,47 @@ mod tests {
         assert!(reconcile(&b.paths.root, a.paths.root.to_str().unwrap(), &branch).is_err());
         assert_eq!(before, snapshot(&b.paths.root).unwrap().head);
         assert!(!b.paths.root.join("state/leak").exists());
+    }
+    #[test]
+    fn plaintext_credentials_are_blocked_even_after_removal_from_current_version() {
+        let temp = TempDir::new().unwrap();
+        let hub = device(temp.path());
+        let dir = hub.paths.mcp.join("test");
+        fs::create_dir_all(&dir).unwrap();
+        let config = dir.join("server.json");
+        fs::write(&config, r#"{"env":{"API_TOKEN":"private-value"}}"#).unwrap();
+        commit(&hub.paths.root, "Import sensitive config", None, None).unwrap();
+        assert!(check_upload_history(&hub.paths.root).is_err());
+        fs::write(&config, r#"{"env":{"API_TOKEN":"${API_TOKEN}"}}"#).unwrap();
+        commit(&hub.paths.root, "Use environment reference", None, None).unwrap();
+        let error = check_upload_history(&hub.paths.root)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("mcp/test/server.json"), "{error}");
+        assert!(!error.contains("private-value"));
+        let clean = device(&temp.path().join("clean"));
+        fs::create_dir_all(clean.paths.mcp.join("test")).unwrap();
+        fs::write(
+            clean.paths.mcp.join("test/server.json"),
+            r#"{"env":{"API_TOKEN":"${API_TOKEN}","PORT":"8000"}}"#,
+        )
+        .unwrap();
+        commit(&clean.paths.root, "Environment reference only", None, None).unwrap();
+        check_upload_history(&clean.paths.root).unwrap();
+    }
+    #[test]
+    fn credential_detection_covers_headers_urls_and_arguments() {
+        for value in [
+            serde_json::json!({"headers":{"Authorization":"Bearer private-value"}}),
+            serde_json::json!({"url":"https://host/mcp?api_key=private-value"}),
+            serde_json::json!({"url":"https://user:password@host/mcp"}),
+            serde_json::json!({"args":["--token","private-value"]}),
+            serde_json::json!({"args":["--api-key=private-value"]}),
+        ] {
+            assert!(has_plaintext_credentials(&value));
+        }
+        assert!(!has_plaintext_credentials(
+            &serde_json::json!({"headers":{"Authorization":"Bearer ${AUTH_HEADER}"}, "args":["--token","${TOKEN}"]})
+        ));
     }
 }
