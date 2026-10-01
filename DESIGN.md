@@ -61,3 +61,6 @@ Shared owners are Button, Dialog, Toast, SearchField, StatusBadge, PageHeader, m
 - ≥ 1600px: the content stage remains centered and Target Sync expands its capability summary and file-detail regions instead of leaving a large one-sided void.
 - 720–1099px: compact rail/top dock, two-column cards where useful.
 - < 720px: single-column content, horizontally scrollable navigation, full-width actions, and dialogs inset by 12px.
+
+Remote versions and reset reuse material cards, field, Button, inline-error and Dialog. Quick cleanup is a danger action separated from rescan. Reset uses typed confirmation and exact consequences; connection status and upload failures remain readable inline. Existing tokens remain authoritative.
+Import source navigation uses the existing scan tab visual family with toggle-button semantics, localized tool names, selected/available counters and a persistent total/unique selection summary. It precedes capability categories and wraps at narrow widths.

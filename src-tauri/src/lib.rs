@@ -36,8 +36,23 @@ impl Drop for InitGuard {
     }
 }
 
-fn hub() -> Result<AgentHub, String> {
-    AgentHub::open_default().map_err(err)
+static OPERATIONS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+struct DesktopHub {
+    inner: AgentHub,
+    _guard: std::sync::MutexGuard<'static, ()>,
+}
+impl std::ops::Deref for DesktopHub {
+    type Target = AgentHub;
+    fn deref(&self) -> &AgentHub {
+        &self.inner
+    }
+}
+fn hub() -> Result<DesktopHub, String> {
+    let guard = OPERATIONS.lock().map_err(err)?;
+    Ok(DesktopHub {
+        inner: AgentHub::open_default().map_err(err)?,
+        _guard: guard,
+    })
 }
 fn err(e: impl std::fmt::Display) -> String {
     agenthub_core::secrets::redact(&e.to_string())
@@ -530,9 +545,41 @@ fn git_commit(
     message: String,
     name: Option<String>,
     email: Option<String>,
-) -> Result<String, String> {
+) -> Result<git::CommitResult, String> {
     let h = hub()?;
-    git::commit(&h.paths.root, &message, name.as_deref(), email.as_deref()).map_err(err)
+    git::commit_and_sync(&h.paths.root, &message, name.as_deref(), email.as_deref()).map_err(err)
+}
+
+#[tauri::command(async)]
+fn reset_agenthub(confirmation: String) -> Result<String, String> {
+    let _init = InitGuard::acquire()?;
+    let h = hub()?;
+    let DesktopHub { inner, _guard } = h;
+    let paths = inner.paths.clone();
+    drop(inner);
+    agenthub_core::reset::reset(&paths, &confirmation)
+        .map(|path| path.display().to_string())
+        .map_err(err)
+}
+#[tauri::command(async)]
+fn remote_settings() -> Result<git::RemoteSettings, String> {
+    let h = hub()?;
+    git::remote_settings(&h.paths.root).map_err(err)
+}
+#[tauri::command(async)]
+fn connect_remote(url: String, branch: String) -> Result<git::RemoteSettings, String> {
+    let h = hub()?;
+    git::connect_remote(&h.paths.root, &url, &branch).map_err(err)
+}
+#[tauri::command(async)]
+fn disconnect_remote() -> Result<(), String> {
+    let h = hub()?;
+    git::disconnect_remote(&h.paths.root).map_err(err)
+}
+#[tauri::command(async)]
+fn sync_remote() -> Result<(), String> {
+    let h = hub()?;
+    git::sync_remote(&h.paths.root).map_err(err)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -593,7 +640,12 @@ pub fn run() {
             git_diff,
             git_identity,
             git_log,
-            git_commit
+            git_commit,
+            reset_agenthub,
+            remote_settings,
+            connect_remote,
+            disconnect_remote,
+            sync_remote
         ])
         .run(tauri::generate_context!())
         .expect("error while running AgentHub")

@@ -16,6 +16,7 @@ import {
   FolderTree,
   GitBranch,
   HardDrive,
+  Cloud,
   History,
   Eye,
   KeyRound,
@@ -38,7 +39,7 @@ import {
   Upload,
   UserRound,
 } from "lucide-react";
-import { api, type AutoSyncProfile, type Capability, type CapabilityDetail, type CapabilityMutationResult, type Dashboard, type GitIdentity, type HostResource, type Kind, type Plan, type PolicySettings, type RuleDocument, type RuntimeDiagnostics, type ScanItem, type SyncSelection, type Target, type Transaction } from "./lib/api";
+import { api, type AutoSyncProfile, type Capability, type CapabilityDetail, type CapabilityMutationResult, type Dashboard, type GitIdentity, type HostResource, type Kind, type Plan, type PolicySettings, type RuleDocument, type RuntimeDiagnostics, type RemoteSettings, type ScanItem, type SyncSelection, type Target, type Transaction } from "./lib/api";
 import { t } from "./lib/i18n";
 import agentHubLogo from "./assets/agenthub-logo.png";
 import { Button, Dialog, PageHeader, SearchField, StatusBadge, Toast } from "./components/ui";
@@ -127,6 +128,7 @@ function transactionMode(mode: Transaction["mode"]) {
 }
 
 export default function App() {
+  const [resetRecovery, setResetRecovery] = useState("");
   const [page, setPage] = useState<Page>("overview");
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [diagnostics, setDiagnostics] = useState<RuntimeDiagnostics | null>(null);
@@ -180,7 +182,7 @@ export default function App() {
     );
   }
 
-  if (!dashboard.initialized) return <Init onDone={refresh} />;
+  if (!dashboard.initialized) return <Init recoveryPath={resetRecovery} onDone={(count) => { setResetRecovery(""); setToast(`${count} ${t("inventory.scanImported")}`); refresh(); }} />;
 
   const content = {
     overview: <Overview data={dashboard} />,
@@ -189,7 +191,7 @@ export default function App() {
     sync: <Sync onApplied={refresh} onNotify={setToast} />,
     git: <GitPage onCommitted={() => { setToast(t("toast.committed")); refresh(); }} />,
     transactions: <Transactions data={dashboard} onChanged={refresh} onNotify={setToast} />,
-    settings: <SettingsPage data={dashboard} />,
+    settings: <SettingsPage data={dashboard} onReset={(path) => { setResetRecovery(path); setPage("overview"); void refresh(); }} />,
   }[page];
 
   return (
@@ -207,6 +209,7 @@ export default function App() {
               type="button"
               className={page === id ? "active" : ""}
               aria-current={page === id ? "page" : undefined}
+              aria-label={t(`nav.${id}`)}
               onClick={() => setPage(id)}
               key={id}
             >
@@ -293,6 +296,7 @@ function Inventory({ onChanged, onNotify }: { onChanged: () => void; onNotify: (
   const [scanItems, setScanItems] = useState<ScanItem[] | null>(null);
   const [scanSelected, setScanSelected] = useState<Set<string>>(new Set());
   const [scanKind, setScanKind] = useState<Kind>("skill");
+  const [scanSource, setScanSource] = useState("all");
   const [scanBusy, setScanBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const loadInventory = useCallback(() => { api.inventory().then(setItems).catch(() => setItems([])); }, []);
@@ -357,7 +361,7 @@ function Inventory({ onChanged, onNotify }: { onChanged: () => void; onNotify: (
   };
   const scanForImport = async () => {
     setScanBusy(true); setLoadError("");
-    try { setScanItems(await api.scan()); setScanSelected(new Set()); }
+    try { setScanItems(await api.scan()); setScanSelected(new Set()); setScanSource("all"); }
     catch (value) { setLoadError(String(value)); }
     finally { setScanBusy(false); }
   };
@@ -372,7 +376,7 @@ function Inventory({ onChanged, onNotify }: { onChanged: () => void; onNotify: (
     finally { setScanBusy(false); }
   };
   const canonicalDigests = useMemo(() => new Set(items.map((item) => `${item.kind}:${item.digest}`)), [items]);
-  const visibleScanItems = (scanItems ?? []).filter((item) => item.kind === scanKind);
+  const visibleScanItems = (scanItems ?? []).filter((item) => item.kind === scanKind && (scanSource === "all" || item.source === scanSource));
   const scanImportableItems = (scanItems ?? []).filter((item) => item.importable && !canonicalDigests.has(`${item.kind}:${item.digest}`));
 
   return (
@@ -437,10 +441,11 @@ function Inventory({ onChanged, onNotify }: { onChanged: () => void; onNotify: (
       </Dialog>
       <Dialog open={scanItems !== null} wide onClose={() => !scanBusy && setScanItems(null)} title={t("inventory.scanImportTitle")} actions={<><Button variant="secondary" disabled={scanBusy} onClick={() => setScanItems(null)}>{t("common.cancel")}</Button><Button disabled={scanBusy || scanSelected.size === 0} onClick={() => void importScanned()}>{scanBusy ? <RefreshCw className="spin" size={16} /> : <Upload size={16} />}{scanBusy ? t("inventory.importingScan") : t("inventory.importScanned")}</Button></>}>
         <p>{t("inventory.scanImportBody")}</p>
+        <ImportSourcePicker items={scanItems ?? []} available={scanImportableItems} selected={scanSelected} source={scanSource} onSource={setScanSource} onSelected={setScanSelected} busy={scanBusy} />
         <div className="scan-kind-tabs" role="tablist" aria-label={t("init.groups")}>
-          {kindMeta.map(({ id, icon: KindIcon }) => { const group = (scanItems ?? []).filter((item) => item.kind === id); return <button type="button" role="tab" aria-selected={scanKind === id} className={scanKind === id ? "is-selected" : ""} onClick={() => setScanKind(id)} key={id}><KindIcon size={17} /><span><strong>{t(`kinds.${id}`)}</strong><small>{group.filter((item) => scanSelected.has(item.id)).length} / {group.length}</small></span></button>; })}
+          {kindMeta.map(({ id, icon: KindIcon }) => { const group = (scanItems ?? []).filter((item) => item.kind === id && (scanSource === "all" || item.source === scanSource)); return <button type="button" role="tab" aria-selected={scanKind === id} className={scanKind === id ? "is-selected" : ""} onClick={() => setScanKind(id)} key={id}><KindIcon size={17} /><span><strong>{t(`kinds.${id}`)}</strong><small>{group.filter((item) => scanSelected.has(item.id)).length} / {group.length}</small></span></button>; })}
         </div>
-        <div className="scan-group-toolbar"><span>{visibleScanItems.length} {t("init.discovered")}</span><Button variant="quiet" disabled={scanBusy || !scanImportableItems.some((item) => item.kind === scanKind)} onClick={() => setScanSelected((current) => { const next = new Set(current); const available = scanImportableItems.filter((item) => item.kind === scanKind); const allSelected = available.every((item) => next.has(item.id)); available.forEach((item) => allSelected ? next.delete(item.id) : next.add(item.id)); return next; })}>{t("init.selectGroup")}</Button></div>
+        <div className="scan-group-toolbar"><span>{visibleScanItems.length} {t("init.discovered")}</span><Button variant="quiet" disabled={scanBusy || !scanImportableItems.some((item) => item.kind === scanKind && (scanSource === "all" || item.source === scanSource))} onClick={() => setScanSelected((current) => { const next = new Set(current); const available = scanImportableItems.filter((item) => item.kind === scanKind && (scanSource === "all" || item.source === scanSource)); const allSelected = available.every((item) => next.has(item.id)); available.forEach((item) => allSelected ? next.delete(item.id) : next.add(item.id)); return next; })}>{t("init.selectGroup")}</Button></div>
         <div className="scan-list scan-list--dialog">
           {visibleScanItems.length === 0 && <EmptyState icon={Boxes} title={t("init.emptyGroup")} body={t("init.emptyGroupHint")} compact />}
           {visibleScanItems.map((item) => { const exists = canonicalDigests.has(`${item.kind}:${item.digest}`); const disabled = !item.importable || exists; const checked = scanSelected.has(item.id); const name = item.source_key?.replace(/^server:/, "") ?? item.path.split(/[\\/]/).pop(); return <label className={`${checked ? "is-selected" : ""} ${disabled ? "is-disabled" : ""}`} key={item.id}><input type="checkbox" checked={checked} disabled={scanBusy || disabled} onChange={() => setScanSelected((current) => { const next = new Set(current); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next; })} /><span className="scan-check">{disabled ? <AlertTriangle size={15} /> : <CheckCircle2 size={17} />}</span><span className="scan-copy"><strong>{name}</strong><small><b>{item.source}</b><span>{item.path}</span></small>{exists && <em>{t("inventory.alreadyCanonical")}</em>}{!exists && item.warning && <em>{t(`init.${item.warning}`)}</em>}</span><code>{item.digest.slice(0, 8)}</code></label>; })}
@@ -468,6 +473,7 @@ function HostResources({ onNotify }: { onNotify: (message: string) => void }) {
   useEffect(() => { void load(); }, [load]);
   const chosen = items.filter((item) => selected.has(item.id));
   // "Not imported" means host-only content that the adapter allows us to delete; Canonical matches and protected constraints are never auto-selected.
+  const deletable = items.filter((item) => item.deletable);
   const unimported = items.filter((item) => item.relation === "host_only" && item.deletable);
   const openConfirm = () => { setAcknowledged(false); setConfirming(true); };
   const remove = async () => {
@@ -480,13 +486,13 @@ function HostResources({ onNotify }: { onNotify: (message: string) => void }) {
     finally { setDeleting(false); }
   };
   return <>
-    <PageHeader eyebrow="HOST INVENTORY" title={t("hosts.title")} subtitle={t("hosts.subtitle")} actions={<><Button variant="secondary" disabled={loading || deleting || !unimported.length} title={unimported.length ? undefined : t("hosts.noUnimported")} onClick={() => setSelected(new Set(unimported.map((item) => item.id)))}><ListChecks size={16} />{t("hosts.selectUnimported")} ({unimported.length})</Button><Button variant="secondary" disabled={loading || deleting} onClick={() => void load(target)}><RefreshCw className={loading ? "spin" : ""} size={16} />{t("hosts.rescan")}</Button></>} />
+    <PageHeader eyebrow="HOST INVENTORY" title={t("hosts.title")} subtitle={t("hosts.subtitle")} actions={<><Button variant="danger" disabled={loading || deleting || !deletable.length} onClick={() => { setSelected(new Set(deletable.map((item) => item.id))); openConfirm(); }}><Trash2 size={16} />{t("hosts.quickClean")} ({deletable.length})</Button><Button variant="secondary" disabled={loading || deleting || !unimported.length} title={unimported.length ? undefined : t("hosts.noUnimported")} onClick={() => setSelected(new Set(unimported.map((item) => item.id)))}><ListChecks size={16} />{t("hosts.selectUnimported")} ({unimported.length})</Button><Button variant="secondary" disabled={loading || deleting} onClick={() => void load(target)}><RefreshCw className={loading ? "spin" : ""} size={16} />{t("hosts.rescan")}</Button></>} />
     <div className="target-tabs host-target-tabs" role="tablist" aria-label={t("hosts.chooseTarget")}>{targetMeta.map((meta) => <button type="button" role="tab" aria-selected={target === meta.id} className={target === meta.id ? "is-selected" : ""} onClick={() => { if (deleting) return; setConfirming(false); setAcknowledged(false); setTarget(meta.id); }} key={meta.id}><span className="target-tab__mark">{meta.mark}</span><span><strong>{t(`targets.${meta.id}`)}</strong><small>{meta.description}</small></span><CheckCircle2 size={17} /></button>)}</div>
     <div className="host-legend"><span className="source-pill source-pill--canonical">{t("hosts.canonicalMatch")}</span><span className="source-pill source-pill--host">{t("hosts.hostOnly")}</span><span className="source-pill source-pill--constraint">{t("hosts.constraint")}</span><p>{t("hosts.legendHint")}</p></div>
     {error && <div className="inline-error" role="alert"><Activity size={18} /><span>{error}</span></div>}
     {loading ? <div className="material host-loading"><span className="spinner" /><p>{t("hosts.scanning")}</p></div> : <div className="inventory-grid host-grid">{kindMeta.map(({ id, icon: KindIcon, accent }) => { const group = items.filter((item) => item.kind === id); return <section className={`material inventory-card inventory-card--${accent}`} key={id}><header className="inventory-card__header"><span className="inventory-card__icon"><KindIcon size={20} /></span><div><h2>{t(`kinds.${id}`)}</h2><p>{group.length} {t("hosts.resources")}</p></div><span className="count-badge">{group.length}</span></header><div className="host-resource-list">{group.map((item) => <label className={`${selected.has(item.id) ? "is-selected" : ""} ${!item.deletable ? "is-protected" : ""}`} key={item.id}><input type="checkbox" disabled={!item.deletable || deleting} checked={selected.has(item.id)} onChange={() => setSelected((current) => { const next = new Set(current); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next; })} /><span className="host-resource__icon">{item.deletable ? <CheckCircle2 size={17} /> : <ShieldCheck size={17} />}</span><span className="host-resource__copy"><strong>{item.display_name}</strong><code>{item.path}</code><small>{item.canonical_id ? `${t("hosts.canonicalId")}: ${item.canonical_id}` : item.constraint ? t(`hosts.constraints.${item.constraint}`) : t("hosts.notCanonical")}</small></span><span className={`source-pill source-pill--${item.relation === "canonical_match" ? "canonical" : item.relation === "host_only" ? "host" : "constraint"}`}>{t(`hosts.relations.${item.relation}`)}</span></label>)}{!group.length && <EmptyState icon={KindIcon} title={t("hosts.empty")} body={t("hosts.emptyHint")} compact />}</div></section>; })}</div>}
     {selected.size > 0 && <div className="host-cleanup-bar"><div><strong>{selected.size} {t("hosts.selected")}</strong><span>{t("hosts.cleanupHint")}</span></div><span className="host-cleanup-bar__actions"><Button variant="secondary" disabled={deleting} onClick={() => setSelected(new Set())}>{t("hosts.clearSelection")}</Button><Button variant="danger" disabled={deleting} onClick={openConfirm}><Trash2 size={16} />{t("hosts.deleteSelected")}</Button></span></div>}
-    <Dialog open={confirming} onClose={() => !deleting && setConfirming(false)} title={t("hosts.deleteTitle")} actions={<><Button variant="secondary" disabled={deleting} onClick={() => setConfirming(false)}>{t("common.cancel")}</Button><Button variant="danger" disabled={deleting || !acknowledged || !chosen.length} onClick={() => void remove()}>{deleting ? <RefreshCw className="spin" size={16} /> : <Trash2 size={16} />}{t("hosts.deleteAction")}</Button></>}><p>{t("hosts.deleteBody")}</p><div className="host-delete-preview">{chosen.map((item) => <span key={item.id}><strong>{item.display_name}</strong><code>{item.path}</code></span>)}</div>{chosen.some((item) => item.relation === "canonical_match") && <div className="warning-banner"><AlertTriangle size={17} /><span>{t("hosts.driftWarning")}</span></div>}<label className="confirm-ack"><input type="checkbox" checked={acknowledged} disabled={deleting} onChange={(event) => setAcknowledged(event.target.checked)} /><span>{chosen.length} · {t("hosts.cleanupAck")}</span></label></Dialog>
+    <Dialog open={confirming} onClose={() => !deleting && setConfirming(false)} title={t("hosts.deleteTitle")} actions={<><Button variant="secondary" disabled={deleting} onClick={() => setConfirming(false)}>{t("common.cancel")}</Button><Button variant="danger" disabled={deleting || !acknowledged || !chosen.length} onClick={() => void remove()}>{deleting ? <RefreshCw className="spin" size={16} /> : <Trash2 size={16} />}{t("hosts.deleteAction")}</Button></>}><p>{t("hosts.deleteBody")}</p><p>{t("hosts.protectedHint")}</p><div className="host-delete-preview">{chosen.map((item) => <span key={item.id}><strong>{item.display_name}</strong><code>{item.path}</code></span>)}</div>{chosen.some((item) => item.relation === "canonical_match") && <div className="warning-banner"><AlertTriangle size={17} /><span>{t("hosts.driftWarning")}</span></div>}<label className="confirm-ack"><input type="checkbox" checked={acknowledged} disabled={deleting} onChange={(event) => setAcknowledged(event.target.checked)} /><span>{chosen.length} · {t("hosts.cleanupAck")}</span></label></Dialog>
   </>;
 }
 
@@ -855,6 +861,20 @@ function GitPage({ onCommitted }: { onCommitted: () => void }) {
   const [status, setStatus] = useState("");
   const [diff, setDiff] = useState("");
   const [history, setHistory] = useState("");
+  const [remote, setRemote] = useState<RemoteSettings>({ branch: "main" });
+  const [remoteUrl, setRemoteUrl] = useState("");
+  const [remoteBranch, setRemoteBranch] = useState("main");
+  const [remoteError, setRemoteError] = useState("");
+  const [remoteNotice, setRemoteNotice] = useState("");
+  const remoteAction = async (action: "connect" | "disconnect" | "sync") => {
+    setBusy(true); setRemoteError(""); setRemoteNotice("");
+    try {
+      if (action === "connect") { setRemote(await api.connectRemote(remoteUrl.trim(), remoteBranch.trim())); setRemoteNotice(t("git.connected")); }
+      else if (action === "disconnect") { await api.disconnectRemote(); setRemote({ branch: remoteBranch }); }
+      else { await api.syncRemote(); await load(); onCommitted(); setRemoteNotice(t("git.synced")); }
+    } catch (value) { setRemoteError(String(value)); }
+    finally { setBusy(false); }
+  };
   const [identity, setIdentity] = useState<GitIdentity>({});
   const [message, setMessage] = useState("");
   const [name, setName] = useState("");
@@ -862,7 +882,8 @@ function GitPage({ onCommitted }: { onCommitted: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const load = useCallback(async () => {
-    const [nextStatus, nextDiff, nextHistory, nextIdentity] = await Promise.all([api.gitStatus(), api.gitDiff(), api.gitLog(), api.gitIdentity()]);
+    const [nextStatus, nextDiff, nextHistory, nextIdentity, nextRemote] = await Promise.all([api.gitStatus(), api.gitDiff(), api.gitLog(), api.gitIdentity(), api.remoteSettings()]);
+    setRemote(nextRemote); setRemoteUrl(nextRemote.url ?? ""); setRemoteBranch(nextRemote.branch);
     setStatus(nextStatus); setDiff(nextDiff); setHistory(nextHistory); setIdentity(nextIdentity);
     setName(nextIdentity.name ?? ""); setEmail(nextIdentity.email ?? "");
   }, []);
@@ -874,7 +895,9 @@ function GitPage({ onCommitted }: { onCommitted: () => void }) {
     if ((!identity.name && !name.trim()) || (!identity.email && !/^\S+@\S+\.\S+$/.test(email))) { setError(t("git.identityHint")); return; }
     setBusy(true);
     try {
-      await api.gitCommit(message.trim(), identity.name ? undefined : name.trim(), identity.email ? undefined : email.trim());
+      const result = await api.gitCommit(message.trim(), identity.name ? undefined : name.trim(), identity.email ? undefined : email.trim());
+      setRemoteError(result.remote_error ? `${t("git.localSaved")} ${result.remote_error}` : "");
+      setRemoteNotice(result.remote_synced ? t("git.synced") : t("git.localSaved"));
       setMessage(""); await load(); onCommitted();
     } catch (value) { setError(String(value)); }
     finally { setBusy(false); }
@@ -885,8 +908,19 @@ function GitPage({ onCommitted }: { onCommitted: () => void }) {
       <PageHeader title={t("git.title")} subtitle={t("git.subtitle")} />
       <section className="git-summary material">
         <span className="git-summary__icon"><GitBranch size={25} /></span>
-        <div><p className="eyebrow">{t("git.branch")}</p><h2>main</h2><code>~/.agenthub/.git</code></div>
+        <div><p className="eyebrow">{t("git.branch")}</p><h2>{status.split("\n")[0]?.replace(/^## /, "") || t("git.title")}</h2><code>~/.agenthub/.git</code></div>
         <StatusBadge tone={dirty ? "warning" : "ok"}>{dirty ? t("overview.pending") : t("git.clean")}</StatusBadge>
+      </section>
+      <section className="material commit-card">
+        <header><span className="commit-card__icon"><Cloud size={20} /></span><div><h2>{t("git.remoteTitle")}</h2><p>{t("git.remoteHint")}</p></div></header>
+        <p>{t("git.authHint")}</p>
+        <form noValidate onSubmit={(event) => { event.preventDefault(); void remoteAction("connect"); }}>
+          <div className="form-grid"><label className="field"><span>{t("git.remoteUrl")}</span><input value={remoteUrl} disabled={busy || Boolean(remote.url)} placeholder="https://github.com/user/agenthub.git" onChange={(event) => setRemoteUrl(event.target.value)} /></label><label className="field"><span>{t("git.remoteBranch")}</span><input value={remoteBranch} disabled={busy || Boolean(remote.url)} onChange={(event) => setRemoteBranch(event.target.value)} /></label></div>
+          <div className="remote-actions">{remote.url ? <><StatusBadge tone="ok">{t("git.connected")}</StatusBadge><Button type="button" disabled={busy || dirty || !history} onClick={() => void remoteAction("sync")}><RefreshCw size={16} />{t("git.syncNow")}</Button><Button type="button" variant="secondary" disabled={busy} onClick={() => void remoteAction("disconnect")}>{t("git.disconnect")}</Button></> : <Button type="submit" disabled={busy || !remoteUrl.trim() || !remoteBranch.trim()}>{busy ? <RefreshCw className="spin" size={16} /> : <Cloud size={16} />}{t("git.connect")}</Button>}</div>
+        </form>
+        <p>{t("git.remoteScope")}</p>
+        {remoteNotice && <p role="status">{remoteNotice}</p>}
+        {remoteError && <div className="inline-error" role="alert"><AlertTriangle size={17} /><div><p>{remoteError}</p><p>{t("git.retryHint")}</p></div></div>}
       </section>
       <form className="material commit-card" noValidate onSubmit={commit}>
         <header><span className="commit-card__icon"><Save size={20} /></span><div><h2>{t("git.commitTitle")}</h2><p>{t("git.commitHint")}</p></div></header>
@@ -997,7 +1031,17 @@ function Transactions({ data, onChanged, onNotify }: { data: Dashboard; onChange
   );
 }
 
-function SettingsPage({ data }: { data: Dashboard }) {
+function SettingsPage({ data, onReset }: { data: Dashboard; onReset: (path: string) => void }) {
+  const [resetOpen, setResetOpen] = useState(false);
+  const [resetConfirmation, setResetConfirmation] = useState("");
+  const [resetBusy, setResetBusy] = useState(false);
+  const [resetError, setResetError] = useState("");
+  const reset = async () => {
+    setResetBusy(true); setResetError("");
+    try { const path = await api.resetAgenthub(resetConfirmation); onReset(path); }
+    catch (value) { setResetError(String(value)); }
+    finally { setResetBusy(false); }
+  };
   const [diagnostics, setDiagnostics] = useState<RuntimeDiagnostics | null>(null);
   const [policy, setPolicy] = useState<PolicySettings>({ strict_authoritative: false, sync_after_reverse_import: false });
   const [savingPolicy, setSavingPolicy] = useState(false);
@@ -1019,6 +1063,8 @@ function SettingsPage({ data }: { data: Dashboard }) {
   return (
     <>
       <PageHeader title={t("nav.settings")} subtitle={t("settings.subtitle")} />
+      <section className="material commit-card"><header><span className="commit-card__icon"><RefreshCw size={20} /></span><div><h2>{t("settings.resetTitle")}</h2><p>{t("settings.resetHint")}</p></div></header><Button variant="danger" onClick={() => { setResetConfirmation(""); setResetError(""); setResetOpen(true); }}>{t("settings.resetAction")}</Button></section>
+      <Dialog open={resetOpen} onClose={() => !resetBusy && setResetOpen(false)} title={t("settings.resetTitle")} actions={<><Button variant="secondary" disabled={resetBusy} onClick={() => setResetOpen(false)}>{t("common.cancel")}</Button><Button variant="danger" disabled={resetBusy || resetConfirmation !== "AGENTHUB"} onClick={() => void reset()}>{resetBusy ? <RefreshCw className="spin" size={16} /> : <Trash2 size={16} />}{t("settings.resetAction")}</Button></>}><p>{t("settings.resetBody")}</p><p>{t("settings.resetBackup")}</p><label className="field"><span>{t("settings.resetType")}</span><input value={resetConfirmation} disabled={resetBusy} onChange={(event) => setResetConfirmation(event.target.value)} /></label>{resetError && <div className="inline-error" role="alert">{resetError}</div>}</Dialog>
       <div className="settings-grid">
         {cards.map(({ icon: CardIcon, title, hint, value, meta, tone }) => (
           <section className={`material settings-card settings-card--${tone}`} key={title}>
@@ -1031,7 +1077,7 @@ function SettingsPage({ data }: { data: Dashboard }) {
       </div>
       <section className="material security-note">
         <span><KeyRound size={21} /></span>
-        <div><h2>MCP Secrets</h2><p>XChaCha20-Poly1305 · <code>secrets/master.key</code></p></div>
+        <div><h2>{t("settings.mcpCredentials")}</h2><p>XChaCha20-Poly1305 · <code>secrets/master.key</code></p></div>
         <StatusBadge tone="ok">{t("settings.localOnly")}</StatusBadge>
       </section>
       <section className="material policy-panel">
@@ -1058,25 +1104,39 @@ function EmptyState({ icon: EmptyIcon, title, body, compact = false }: { icon: I
   );
 }
 
-function Init({ onDone }: { onDone: () => void }) {
+function ImportSourcePicker({ items, available, selected, source, onSource, onSelected, busy }: { items: ScanItem[]; available: ScanItem[]; selected: Set<string>; source: string; onSource: (source: string) => void; onSelected: (selected: Set<string>) => void; busy: boolean }) {
+  const sources = [...new Set(items.map((item) => item.source))];
+  const chosen = items.filter((item) => selected.has(item.id));
+  const unique = new Set(chosen.map((item) => `${item.kind}:${item.digest}`)).size;
+  const current = available.filter((item) => source === "all" || item.source === source);
+  return <section className="import-sources" aria-label={t("init.sources")}>
+    <div className="scan-kind-tabs scan-source-tabs" role="group" aria-label={t("init.sources")}>
+      {["all", ...sources].map((id) => { const group = available.filter((item) => id === "all" || item.source === id); return <button type="button" aria-label={`${id === "all" ? t("init.allSources") : targetMeta.some((target) => target.id === id) ? t(`targets.${id}`) : id} ${group.filter((item) => selected.has(item.id)).length} / ${group.length}`} aria-pressed={source === id} className={source === id ? "is-selected" : ""} disabled={busy} key={id} onClick={() => onSource(id)}><span><strong>{id === "all" ? t("init.allSources") : targetMeta.some((target) => target.id === id) ? t(`targets.${id}`) : id}</strong><small>{group.filter((item) => selected.has(item.id)).length} / {group.length}</small></span></button>; })}
+    </div>
+    <div className="scan-group-toolbar"><p role="status">{t("init.totalSelected")} <strong>{selected.size}</strong> · {t("init.uniqueSelected")} <strong>{unique}</strong><small>{t("init.selectionHint")}</small></p><Button variant="quiet" disabled={busy || !current.length} onClick={() => { const next = new Set(selected); const allSelected = current.every((item) => next.has(item.id)); current.forEach((item) => allSelected ? next.delete(item.id) : next.add(item.id)); onSelected(next); }}>{current.length && current.every((item) => selected.has(item.id)) ? t("init.clearSource") : t("init.selectSource")}</Button></div>
+  </section>;
+}
+
+function Init({ onDone, recoveryPath }: { onDone: (count: number) => void; recoveryPath?: string }) {
   const [items, setItems] = useState<ScanItem[] | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [recover, setRecover] = useState(false);
   const [scanKind, setScanKind] = useState<Kind>("skill");
+  const [scanSource, setScanSource] = useState("all");
   const importableItems = items?.filter((item) => item.importable) ?? [];
-  const visibleScanItems = items?.filter((item) => item.kind === scanKind) ?? [];
+  const visibleScanItems = items?.filter((item) => item.kind === scanKind && (scanSource === "all" || item.source === scanSource)) ?? [];
   const visibleImportableItems = visibleScanItems.filter((item) => item.importable);
   const visibleSelectedCount = visibleImportableItems.filter((item) => selected.has(item.id)).length;
 
   const scan = async () => {
     setBusy(true); setError("");
-    try { setItems(await api.scan()); setSelected(new Set()); } catch (value) { setError(String(value)); } finally { setBusy(false); }
+    try { setItems(await api.scan()); setSelected(new Set()); setScanSource("all"); } catch (value) { setError(String(value)); } finally { setBusy(false); }
   };
   const finish = async () => {
     setBusy(true); setError("");
-    try { await api.finishInit([...selected]); onDone(); } catch (value) {
+    try { const imported = await api.finishInit([...selected]); onDone(imported.length); } catch (value) {
       const message = String(value); setError(message); if (message.includes("incomplete Canonical")) setRecover(true);
     } finally { setBusy(false); }
   };
@@ -1094,6 +1154,7 @@ function Init({ onDone }: { onDone: () => void }) {
           <span className="init-step">{items === null ? "01" : "02"} / 02</span>
         </header>
         <PageHeader eyebrow="LIBRARY SETUP" title={t("init.title")} subtitle={t("init.subtitle")} />
+        {recoveryPath && <div className="warning-banner" role="status"><ShieldCheck size={17} /><span>{t("settings.recoveryLocation")} <code>{recoveryPath}</code></span></div>}
         <div className="init-progress" aria-hidden="true"><i className={items === null ? "is-current" : "is-done"} /><i className={items !== null ? "is-current" : ""} /></div>
 
         {error && (
@@ -1115,9 +1176,10 @@ function Init({ onDone }: { onDone: () => void }) {
               <div><h2>{t("init.found")}</h2><small>{selected.size} {t("init.selected")} · {importableItems.length} {t("init.importable")} · {items.length - importableItems.length} {t("init.rejected")}</small></div>
               <div><Button variant="quiet" disabled={busy || selected.size === importableItems.length} onClick={() => setSelected(new Set(importableItems.map((item) => item.id)))}>{t("init.selectAll")}</Button><Button variant="quiet" disabled={busy || selected.size === 0} onClick={() => setSelected(new Set())}>{t("init.clear")}</Button></div>
             </header>
+            <ImportSourcePicker items={items} available={importableItems} selected={selected} source={scanSource} onSource={setScanSource} onSelected={setSelected} busy={busy} />
             <div className="scan-kind-tabs" role="tablist" aria-label={t("init.groups")}>
               {kindMeta.map(({ id, icon: KindIcon }) => {
-                const group = items.filter((item) => item.kind === id);
+                const group = items.filter((item) => item.kind === id && (scanSource === "all" || item.source === scanSource));
                 const groupSelected = group.filter((item) => item.importable && selected.has(item.id)).length;
                 return (
                   <button type="button" role="tab" aria-selected={scanKind === id} className={scanKind === id ? "is-selected" : ""} onClick={() => setScanKind(id)} key={id}>

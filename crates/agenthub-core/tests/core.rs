@@ -764,3 +764,34 @@ fn legacy_default_sync_mode_deserializes_as_automatic_sync() {
     let transaction: Transaction = serde_json::from_str(json).unwrap();
     assert_eq!(transaction.mode, TransactionMode::AutoSync);
 }
+
+#[test]
+fn reset_rebuilds_empty_state_and_preserves_host_and_private_recovery() {
+    let (temp, hub) = fixture();
+    seed(&hub);
+    hub.store.set_initialized(true).unwrap();
+    let host = temp.path().join(".cursor/skills/original");
+    fs::create_dir_all(&host).unwrap();
+    fs::write(host.join("SKILL.md"), "original host content").unwrap();
+    let paths = hub.paths.clone();
+    drop(hub);
+    assert!(agenthub_core::reset::reset(&paths, "wrong").is_err());
+    assert!(paths.skills.join("review/SKILL.md").exists());
+    let recovery = agenthub_core::reset::reset(&paths, "AGENTHUB").unwrap();
+    let fresh = AgentHub::open(paths.clone()).unwrap();
+    assert!(!fresh.store.initialized().unwrap());
+    assert!(canonical::inventory(&paths).unwrap().is_empty());
+    assert!(recovery.join("skills/review/SKILL.md").exists());
+    assert_eq!(
+        fs::read_to_string(host.join("SKILL.md")).unwrap(),
+        "original host content"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            fs::metadata(recovery).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+    }
+}

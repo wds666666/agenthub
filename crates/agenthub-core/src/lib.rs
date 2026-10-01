@@ -5,6 +5,7 @@ pub mod host;
 pub mod models;
 pub mod paths;
 pub mod planner;
+pub mod reset;
 pub mod scanner;
 pub mod secrets;
 pub mod storage;

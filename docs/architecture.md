@@ -27,3 +27,7 @@ Host inventory is a separate read-only projection of the same user-global allowl
 Plugin storage managed by an official CLI or marketplace is not treated as a deletable directory. In v0.1 Claude Code's `~/.claude/plugins` and Codex marketplace/cache state are inventory constraints; future adapters must use the vendor's supported install/uninstall interface and receive their own transaction contract before becoming writable. Cursor local plugins with a recognized manifest under `~/.cursor/plugins/local` remain ordinary writable user resources.
 
 Deleting SQLite permits inventory reconstruction from Canonical files. Transaction history and UI preferences may be lost; Canonical content and Git history remain intact.
+
+## Library reset and remote versions
+Desktop operations are serialized by a process-wide guard. Reset closes SQLite, moves the complete active root to a private sibling recovery directory, creates a fresh uninitialized root, and returns to import selection. Hosts are untouched; all automatic profiles and remote settings are reset. Recovery copies contain secrets and must stay private.
+Remote settings live in repository-local Git configuration, not versioned content. Version saves commit locally first; remote failures are returned separately from local success. Explicit remote sync requires a clean working tree and reconciles by fetch and merge before push. Remote updates do not silently project to hosts.

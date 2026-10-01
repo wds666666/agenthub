@@ -796,3 +796,10 @@ code, pre { font-family: var(--mono); font-variant-ligatures: none; }
   :root { --line: rgba(40, 45, 55, 0.28); --line-strong: rgba(40, 45, 55, 0.48); }
   .button:focus-visible, button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid var(--blue); outline-offset: 2px; box-shadow: none; }
 }
+
+.remote-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 16px; }
+
+.scan-source-tabs { display: flex; flex-wrap: wrap; }
+.scan-source-tabs button { flex: 1 1 120px; }
+.import-sources .scan-group-toolbar p { margin: 0; }
+.import-sources .scan-group-toolbar small { display: block; margin-top: 6px; color: var(--ink-secondary); }

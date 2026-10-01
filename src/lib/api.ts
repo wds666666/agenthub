@@ -24,10 +24,12 @@ export interface ScanImportResult { imported: string[]; skipped_duplicates: numb
 export interface PolicySettings { strict_authoritative: boolean; sync_after_reverse_import: boolean }
 export interface Plan { id: string; target: Target; steps: PlanStep[]; summary: PlanCapabilitySummary[]; selection?: SyncSelection; warnings: string[]; canonical_digest: string; git: { head?: string; dirty: boolean } }
 export interface RuleDocument { schemaVersion: number; id: string; displayName: string; activation: "always" | "manual" | "paths"; paths: string[]; targets: Target[]; body: string }
+export interface RemoteSettings { url?: string; branch: string }
+export interface CommitResult { local_saved: boolean; remote_synced: boolean; remote_error?: string }
 export interface GitIdentity { name?: string; email?: string }
 const isTauri = () => "__TAURI_INTERNALS__" in window;
 const demo: Dashboard = { initialized: true, inventory: { skill: 4, mcp: 2, plugin: 1, rule: 3 }, enabled_targets: ["codex"], auto_sync_targets: ["codex"], dirty: true, recent_transactions: [] };
-async function call<T>(name: string, args?: Record<string, unknown>): Promise<T> { if (!isTauri()) { if (name === "dashboard") return demo as T; if (name === "runtime_diagnostics") return { log_dir: "~/.local/share/dev.agenthub.desktop/logs", canonical_root: "~/.agenthub", git_available: true, platform: "linux" } as T; if (name === "inventory" || name === "transaction_history" || name === "auto_sync_profiles") return [] as T; if (name === "git_status") return "## main\n M rules/safety/rule.md" as T; if (name === "git_diff") return "Canonical diff is available in the desktop app." as T; if (name === "git_log") return "a1b2c3d\t2026-09-27 18:30:00 +0800\tInitialize Canonical" as T; if (name === "git_identity") return { name: "AgentHub User", email: "user@example.com" } as T; throw new Error("This action requires the AgentHub desktop runtime."); } return invoke<T>(name, args); }
+async function call<T>(name: string, args?: Record<string, unknown>): Promise<T> { if (!isTauri()) { if (name === "dashboard") return demo as T; if (name === "runtime_diagnostics") return { log_dir: "~/.local/share/dev.agenthub.desktop/logs", canonical_root: "~/.agenthub", git_available: true, platform: "linux" } as T; if (name === "inventory" || name === "transaction_history" || name === "auto_sync_profiles") return [] as T; if (name === "git_status") return "## main\n M rules/safety/rule.md" as T; if (name === "git_diff") return "Canonical diff is available in the desktop app." as T; if (name === "git_log") return "a1b2c3d\t2026-09-27 18:30:00 +0800\tInitialize Canonical" as T; if (name === "remote_settings") return { branch: "main" } as T; if (name === "git_identity") return { name: "AgentHub User", email: "user@example.com" } as T; throw new Error("This action requires the AgentHub desktop runtime."); } return invoke<T>(name, args); }
 export const api = {
   dashboard: () => call<Dashboard>("dashboard"),
   runtimeDiagnostics: () => call<RuntimeDiagnostics>("runtime_diagnostics"),
@@ -52,11 +54,16 @@ export const api = {
   setAutoSync: (target: Target, selection: SyncSelection, enabled: boolean) => call<AutoSyncUpdateResult>("set_auto_sync", { target, selection, enabled }),
   transactionHistory: (limit = 100) => call<Transaction[]>("transaction_history", { limit }),
   rollbackTransaction: (transactionId: string) => call<Transaction>("rollback_transaction", { transactionId }),
+  resetAgenthub: (confirmation: string) => call<string>("reset_agenthub", { confirmation }),
+  remoteSettings: () => call<RemoteSettings>("remote_settings"),
+  connectRemote: (url: string, branch: string) => call<RemoteSettings>("connect_remote", { url, branch }),
+  disconnectRemote: () => call<void>("disconnect_remote"),
+  syncRemote: () => call<void>("sync_remote"),
   gitStatus: () => call<string>("git_status"),
   gitDiff: () => call<string>("git_diff"),
   gitIdentity: () => call<GitIdentity>("git_identity"),
   gitLog: () => call<string>("git_log"),
-  gitCommit: (message: string, name?: string, email?: string) => call<string>("git_commit", { message, name, email }),
+  gitCommit: (message: string, name?: string, email?: string) => call<CommitResult>("git_commit", { message, name, email }),
   debugEvent: (event: string, context?: string) => {
     if (!isTauri()) { console.debug(`[AgentHub] ${event}`, context ?? ""); return Promise.resolve(); }
     return invoke<void>("debug_event", { event, context });

@@ -85,6 +85,14 @@ enum AutoSyncCommand {
 }
 #[derive(Subcommand)]
 enum GitCommand {
+    RemoteStatus,
+    Connect {
+        url: String,
+        #[arg(long, default_value = "main")]
+        branch: String,
+    },
+    Disconnect,
+    Sync,
     Status,
     Diff,
     Commit {
@@ -214,6 +222,20 @@ fn main() -> Result<()> {
             serde_json::to_string_pretty(&hub.store.recent_transactions(100)?)?
         ),
         Command::Git { command } => match command {
+            GitCommand::RemoteStatus => println!(
+                "{}",
+                serde_json::to_string_pretty(&git::remote_settings(&hub.paths.root)?)?
+            ),
+            GitCommand::Connect { url, branch } => println!(
+                "{}",
+                serde_json::to_string_pretty(&git::connect_remote(
+                    &hub.paths.root,
+                    &url,
+                    &branch
+                )?)?
+            ),
+            GitCommand::Disconnect => git::disconnect_remote(&hub.paths.root)?,
+            GitCommand::Sync => git::sync_remote(&hub.paths.root)?,
             GitCommand::Status => println!("{}", git::status(&hub.paths.root)?),
             GitCommand::Diff => println!("{}", git::diff(&hub.paths.root)?),
             GitCommand::Commit {
@@ -222,7 +244,12 @@ fn main() -> Result<()> {
                 email,
             } => println!(
                 "{}",
-                git::commit(&hub.paths.root, &message, name.as_deref(), email.as_deref())?
+                serde_json::to_string_pretty(&git::commit_and_sync(
+                    &hub.paths.root,
+                    &message,
+                    name.as_deref(),
+                    email.as_deref()
+                )?)?
             ),
             GitCommand::Log => println!("{}", git::log(&hub.paths.root)?),
             GitCommand::Restore { commit, capability } => {
