@@ -39,3 +39,11 @@ The reusable external-agent integration is in [`skills/agenthub-manager`](skills
 CLI 同样支持 `agenthub git connect <url> --branch main`、`git remote-status`、`git sync` 和 `git disconnect`。`git commit` 返回 JSON，区分本机保存成功与远端同步失败。
 
 上传会检查版本历史中的运行目录及可识别的 MCP/JSON 明文凭据；发现后仅显示路径并阻止上传。仅删除当前文件中的密钥不足以清除历史，需先处理敏感历史。任意 Markdown 或二进制中嵌入的秘密无法完全自动识别，请在共享前检查库内容。
+
+### 能力库批量管理与来源显示（0.1.2）
+
+导入页固定显示共享 Agents、Cursor、Codex 和 Claude Code，即使该来源没有发现内容。扫描数与可选新内容数分别显示；已有内容仍显示但不重复导入。受保护插件缓存目前不能导入，零结果提示会说明扫描范围。
+
+我的能力库支持跨类别多选、选择当前搜索结果、选择本类及取消选择。删除前列出全部内容，成功后显示本机恢复副本路径；已启用目标统一同步一次。删除仍是未提交变更，保存版本后才记录并尝试远端同步。
+
+Git 内容与设备状态的划分见 [Canonical 存储标准](docs/agenthub-standard.md)。项目管理 skill 已整理，含 [选择与恢复](skills/agenthub-manager/references/selection.md) 和 [存储与远端同步](skills/agenthub-manager/references/storage.md)；不会将保护标记解释为插件无法读取或格式不公开。

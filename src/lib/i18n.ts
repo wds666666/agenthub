@@ -29,7 +29,7 @@ const messages = {
 } as const;
 const extraMessages: Record<string, Record<string, unknown>> = {
   "zh-CN": {
-    inventory: { scanImport: "扫描并导入", scanImportTitle: "从工具从工具导入", scanImportBody: "重新扫描用户级全局位置。只把你选择的新内容复制进 AgentHub 库；相同内容会自动去重，工具不会被修改。", importScanned: "导入所选", importingScan: "正在安全导入…", alreadyCanonical: "库中已有相同内容", scanImported: "项已导入", scanSkipped: "项重复已跳过", scanAutoFailed: "个自动同步目标失败" },
+    inventory: { scanImport: "扫描并导入", scanImportTitle: "从工具导入", scanImportBody: "重新扫描用户级全局位置。只把你选择的新内容复制进 AgentHub 库；相同内容会自动去重，工具不会被修改。", importScanned: "导入所选", importingScan: "正在安全导入…", alreadyCanonical: "库中已有相同内容", scanImported: "项已导入", scanSkipped: "项重复已跳过", scanAutoFailed: "个自动同步目标失败" },
     sync: { agentsHint: "共享 Skills 目录会被支持 Agent Skills 的多个工具读取；选中管理且清空列表即可显式清空该目录。", strictActive: "强制覆盖已开启", clearManaged: "清空受管域", notManaged: "不管理", cliManaged: "CLI 管理", manageDomain: "管理这个资源类别", emptyMeansClear: "选中管理但不选资源时，将清空目标对应资源类别", domainUntouched: "不读取、不写入该资源类别", rulesIncludedHint: "用全部 AgentHub 库 Rules 重建目标规则域", claudePluginConstraint: "Claude Code 的插件库由官方 plugin CLI 管理。v0.1 会保留 ~/.claude/plugins 并跳过该域，避免破坏登录、市场和已安装插件状态。", codexPluginConstraint: "Codex 插件由个人 marketplace、安装缓存与配置共同管理。v0.1 会保留这些状态并跳过插件域，避免用目录覆盖破坏市场与安装记录。" },
     settings: { coverageTitle: "覆盖策略", coverageHint: "选择让 AgentHub 库覆盖全部可写能力，还是只管理你明确选择的资源类别。", strict: "强制覆盖", scoped: "选择性管理", strictOverwrite: "AgentHub 强制覆盖所有可写资源类别", strictOverwriteHint: "下次预览或自动同步会使用全部 AgentHub 库能力；工具额外内容会删除。", syncAfterImport: "导入后自动同步到工具", syncAfterImportHint: "导入先写入 AgentHub 库，再按已启用目标的保存范围同步；关闭时只导入，不修改任何工具。", planGuard: "手动同步仍需预览确认", backupGuard: "每次写入仍先备份并验证", vendorGuard: "厂商、组织与只读能力始终保留" },
   },
@@ -43,7 +43,8 @@ const extraMessages: Record<string, Record<string, unknown>> = {
 };
 const workflowMessages = {
   "zh-CN": {
-    init: { sources: "按来源工具选择", allSources: "全部来源", totalSelected: "共选择", uniqueSelected: "去重后预计导入", selectionHint: "切换来源或类别会保留选择；相同内容只导入一份。", selectSource: "选择当前来源全部", clearSource: "清空当前来源选择" },
+    inventory: { batchManage: "批量管理能力库", selectedCount: "已选择", selectVisible: "选择当前结果", clearVisible: "取消当前结果", selectCategory: "选择本类", clearCategory: "取消本类", selectItem: "选择能力", deleteSelected: "删除所选能力", batchTitle: "批量删除能力", batchBody: "将从 AgentHub 库中删除下列全部能力，并在本机保留恢复副本。已启用自动同步的工具可能同时移除对应内容。删除后仍需保存版本，才会记录到 Git；不会立即上传远端。", batchDeleted: "项能力已删除", deleteBackup: "删除前的本机恢复副本：" },
+    init: { scannedCount: "扫描发现", newCount: "可选新内容", emptySource: "此来源未发现资源。只扫描用户级全局位置；系统 Skills 和受保护的插件缓存暂不支持导入。", sources: "按来源工具选择", allSources: "全部来源", totalSelected: "共选择", uniqueSelected: "去重后预计导入", selectionHint: "切换来源或类别会保留选择；相同内容只导入一份。", selectSource: "选择当前来源全部", clearSource: "清空当前来源选择" },
 
     "hosts": {
       "quickClean": "快速清理全部可删除资源",
@@ -76,7 +77,8 @@ const workflowMessages = {
     }
   },
   "en": {
-    "init": { "sources": "Choose by source tool", "allSources": "All sources", "totalSelected": "Total selected", "uniqueSelected": "Unique resources to import", "selectionHint": "Selections persist across source and category filters; identical content is imported once.", "selectSource": "Select all from this source", "clearSource": "Clear this source" },
+    inventory: { batchManage: "Manage library selection", selectedCount: "Selected", selectVisible: "Select visible results", clearVisible: "Clear visible results", selectCategory: "Select category", clearCategory: "Clear category", selectItem: "Select capability", deleteSelected: "Delete selected capabilities", batchTitle: "Delete library selection", batchBody: "Remove every listed capability from the AgentHub library and keep a local recovery copy. Enabled automatic-sync targets may remove their copies. Save a version to record the deletions in Git; this action does not upload immediately.", batchDeleted: "capabilities deleted", deleteBackup: "Local recovery copy before deletion:" },
+    "init": { scannedCount: "Discovered", newCount: "Selectable new resources", emptySource: "No resources found here. Only user-global locations are scanned; system Skills and protected plugin caches cannot currently be imported.", "sources": "Choose by source tool", "allSources": "All sources", "totalSelected": "Total selected", "uniqueSelected": "Unique resources to import", "selectionHint": "Selections persist across source and category filters; identical content is imported once.", "selectSource": "Select all from this source", "clearSource": "Clear this source" },
     "hosts": {
       "quickClean": "Quick clean all deletable resources",
       "protectedHint": "Official plugin stores, marketplaces and caches remain protected. Only this tool is cleaned; automatic sync may recreate managed resources."

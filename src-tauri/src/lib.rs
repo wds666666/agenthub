@@ -1,10 +1,10 @@
 use agenthub_core::{
     canonical, git, host,
     models::{
-        AutoSyncProfile, AutoSyncUpdateResult, CapabilityDeleteResult, CapabilityDetail,
-        CapabilityKind, CapabilityMutationResult, Dashboard, GitIdentity, HostCleanupResult,
-        HostResource, Plan, PolicySettings, RuleDocument, ScanImportResult, ScanItem,
-        SyncSelection, Target, Transaction,
+        AutoSyncProfile, AutoSyncUpdateResult, CapabilityBatchDeleteResult, CapabilityDeleteResult,
+        CapabilityDetail, CapabilityKey, CapabilityKind, CapabilityMutationResult, Dashboard,
+        GitIdentity, HostCleanupResult, HostResource, Plan, PolicySettings, RuleDocument,
+        ScanImportResult, ScanItem, SyncSelection, Target, Transaction,
     },
     planner, scanner, transaction, AgentHub,
 };
@@ -211,6 +211,27 @@ fn delete_capability(kind: CapabilityKind, id: String) -> Result<CapabilityDelet
         id,
         kind,
         auto_sync,
+    })
+}
+
+#[tauri::command(async)]
+fn delete_capabilities(
+    selected: Vec<CapabilityKey>,
+) -> Result<CapabilityBatchDeleteResult, String> {
+    let h = hub()?;
+    if !h.store.initialized().map_err(err)? {
+        return Err("AgentHub must be initialized before deleting capabilities".into());
+    }
+    let backup_path = canonical::delete_capabilities(&h.paths, &selected).map_err(err)?;
+    let (auto_sync, auto_sync_error) = match transaction::run_auto_sync(&h.paths, &h.store) {
+        Ok(outcomes) => (outcomes, None),
+        Err(error) => (Vec::new(), Some(err(error))),
+    };
+    Ok(CapabilityBatchDeleteResult {
+        deleted: selected,
+        backup_path,
+        auto_sync,
+        auto_sync_error,
     })
 }
 
@@ -620,6 +641,7 @@ pub fn run() {
             read_rule,
             save_rule,
             delete_capability,
+            delete_capabilities,
             initial_scan,
             host_inventory,
             cleanup_host_resources,

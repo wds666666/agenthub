@@ -19,6 +19,8 @@ export interface AutoSyncProfile { target: Target; enabled: boolean; selection: 
 export interface AutoSyncOutcome { target: Target; changed: boolean; transaction_id?: string; error?: string }
 export interface AutoSyncUpdateResult { profile: AutoSyncProfile; initial_sync?: SyncRunResult }
 export interface CapabilityMutationResult { capability: Capability; auto_sync: AutoSyncOutcome[] }
+export interface CapabilityKey { kind: Kind; id: string }
+export interface CapabilityBatchDeleteResult { deleted: CapabilityKey[]; backup_path: string; auto_sync: AutoSyncOutcome[]; auto_sync_error?: string }
 export interface CapabilityDeleteResult { id: string; kind: Kind; auto_sync: AutoSyncOutcome[] }
 export interface ScanImportResult { imported: string[]; skipped_duplicates: number; auto_sync: AutoSyncOutcome[] }
 export interface PolicySettings { strict_authoritative: boolean; sync_after_reverse_import: boolean }
@@ -38,6 +40,7 @@ export const api = {
   readRule: (id: string) => call<RuleDocument>("read_rule", { id }),
   saveRule: (rule: RuleDocument, create: boolean) => call<CapabilityMutationResult>("save_rule", { rule, create }),
   deleteCapability: (kind: Kind, id: string) => call<CapabilityDeleteResult>("delete_capability", { kind, id }),
+  deleteCapabilities: (selected: CapabilityKey[]) => call<CapabilityBatchDeleteResult>("delete_capabilities", { selected }),
   scan: () => call<ScanItem[]>("initial_scan"),
   hostInventory: (target: Target) => call<HostResource[]>("host_inventory", { target }),
   cleanupHostResources: (target: Target, selectedIds: string[]) => call<HostCleanupResult>("cleanup_host_resources", { target, selectedIds }),

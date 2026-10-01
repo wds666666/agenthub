@@ -1,46 +1,42 @@
 ---
 name: agenthub-manager
-description: Help an agent inspect and safely manage AgentHub's user-global Skills, MCP, Plugins, and Rules through inventory, Plan review, Git history, sync, and rollback. Use when a user asks to manage AgentHub or synchronize its Canonical source to Cursor, Codex, or Claude Code; do not use it for project-local agent configuration.
+description: Inspect, import, edit and synchronize user-global AgentHub Skills, MCP servers, Plugins and Rules. Use when managing the AgentHub library, reviewing host changes, cleaning resources, resetting the library, or connecting its version history across devices. Excludes project-local agent configuration.
 ---
 
 # AgentHub Manager
 
-Use AgentHub as the user's single configuration entry point for global agent capabilities. The Canonical source is `~/.agenthub`; it is separate from the current project and from project-level `.agents`, `.cursor`, `.codex`, or `.claude` folders.
+AgentHub maintains a portable content library at `~/.agenthub` (`AGENTHUB_HOME` can override it). It is independent of the current repository. Canonical files own content; SQLite owns device state; local backups own recovery. Use the installed CLI's `--help` for exact arguments.
 
-## Operating boundaries
+## Inspect before changing
 
-- Never scan or edit project directories, repositories, `AGENTS.md`, or `CLAUDE.md` as part of AgentHub management.
-- Do not edit host Skills, MCP, Plugins, or Rules directly. Make changes in AgentHub Canonical files or through its CLI/Desktop flow.
-- Treat a Plan as read-only. Review its target, selected scope, create/update/delete steps, warnings, and Canonical/Git snapshot before any Apply.
-- Sync is a full replacement of the selected writable capability domains. Unselected scope is excluded from that Plan; Rules have an explicit on/off switch. Models, themes, permissions, accounts, and vendor/organization-managed data are outside the writable scope.
-- Ask for confirmation immediately before a one-off `sync --confirm`, enabling or changing an automatic-sync profile, or any rollback. Never invent confirmation from an earlier message. Once the user enables a specific automatic profile, later AgentHub mutations may use that stored authorization without asking again; expanding its target or scope requires fresh confirmation.
-- Secrets must remain references or encrypted AgentHub secrets. Do not print secret values in chat, logs, diffs, plans, or generated files.
+1. Run `agenthub doctor --json` and `agenthub inventory --json`.
+2. Match the workflow below to the user's request. Reuse authorization already given for that operation; do not ask repeatedly. If target, destructive scope or intent is unclear, show the concrete preview before asking.
+3. Scan only fixed user-global locations. Never use the current project, its parents, or its `AGENTS.md` / `CLAUDE.md` as import inputs.
 
-## Choose the least surprising workflow
+## Import and edit
 
-1. Check state with `agenthub doctor --json` and `agenthub inventory --json`.
-2. If AgentHub is not initialized, ask whether to use the Desktop initialization selector, import all user-global discoveries, or create an empty source. Do not silently import.
-3. For content changes, edit the Canonical resource, validate it, then show Git status/diff. Offer a user-authored Git commit; never auto-commit.
-4. For ongoing synchronization, use the Desktop Target Sync selector to choose the target and scope, preview a Plan, then let the user enable automatic sync. AgentHub immediately reconciles once and only stores the profile after success. Later mutations made through AgentHub automatically run that profile; zero-change runs create no transaction.
-5. For a CLI-only full-scope sync, create a Plan, capture its exact ID, review JSON, then require the user to explicitly approve that same ID before `agenthub sync <target> --plan-id <id> --confirm`.
-6. If an external agent edits Canonical files directly rather than through an AgentHub mutation command, run `agenthub auto-sync run` after validation. This explicitly delivers the change to already-authorized profiles; it does not discover or broaden targets or scopes.
-7. For undo, use transaction history to identify the exact target and transaction. Explain that rollback restores the host state captured immediately before that transaction, creates a new recovery backup/transaction, and does not change Canonical. After rollback, expect drift until the next Plan or automatic run.
+- Desktop initialization and **Scan and import** support source filters for Shared Agents, Cursor, Codex and Claude Code, then Skills/MCP/Plugins/Rules. Switching filters preserves selection; exact content duplicates import once. Zero-result sources stay visible. Shared Agents is Skills-only.
+- Import copies selected validated content into AgentHub. It does not grant permission to change hosts. Later import runs saved profiles only if the user enabled that policy.
+- System/hidden skills and CLI-managed plugin caches are not imported. Codex cache plugins are currently display-only; Claude local plugin manifests are recognized, but marketplace cache import and general cross-tool plugin conversion are not supported. Protected means unsafe to delete directly, not impossible to read.
+- Edit Canonical or use the Desktop Rule editor. Validate before saving. Inventory details are read-only previews; never execute plugin payloads to inspect them.
+- Library multi-selection supports visible search results and categories. Bulk deletion confirms exact resources, archives them locally, then runs saved automatic-sync profiles once. It remains an uncommitted Git change. Report the recovery path. Host cleanup is a separate action and preserves the library; protected stores cannot be selected.
 
-## Useful commands
+## Synchronize hosts
 
-```text
-agenthub doctor --json
-agenthub inventory --json
-agenthub target enable <cursor|codex|claude>
-agenthub plan <cursor|codex|claude> --json
-agenthub sync <cursor|codex|claude> --plan-id <exact-plan-id> --confirm
-agenthub auto-sync status
-agenthub auto-sync run
-agenthub history --json
-agenthub rollback <exact-transaction-id>
-agenthub git status
-agenthub git diff
-agenthub git commit --message "<user-approved message>"
-```
+Use Desktop **Sync to tools** to choose target/scope and review named changes. Plan is read-only; Apply backs up, writes, verifies and rolls back on failure. Host extras in managed domains may be deleted. Preserve unrelated tool settings and protected stores.
 
-Use `agenthub scan` after initialization only as a drift audit. It does not import or merge host changes. Read [references/selection.md](references/selection.md) when the user asks which capabilities are included in a sync or how rollback affects scope.
+For CLI, generate `agenthub plan <cursor|codex|claude> --json`, review its exact ID and scope, then apply the authorized preview with `agenthub sync <target> --plan-id <id> --confirm`. Never bypass a stale-plan failure.
+
+An enabled automatic profile authorizes subsequent mutations within its saved target/scope. External Canonical edits need `agenthub auto-sync run`; it runs only saved profiles and does not import host changes. Read [selection and recovery](references/selection.md) for domain semantics and rollback.
+
+## Save and share versions
+
+Use `agenthub git status`, `agenthub git diff`, and a user-approved `agenthub git commit --message "..."`. Do not commit unrelated content. Read [portable storage and remote synchronization](references/storage.md) before connecting a remote, handling authentication/conflicts, or explaining what travels between devices.
+
+## Recovery and reset
+
+Use `agenthub history --json` and `agenthub rollback <transaction-id>` for host recovery. Explain the exact target and captured state: rollback does not restore library content, and the next sync may recreate drift.
+
+Desktop Reset AgentHub requires typing `AGENTHUB`; it moves the complete old root into a private sibling recovery directory and restarts initialization. It preserves host resources. A reset archive includes keys and local versions; report its path and do not delete it without user instruction.
+
+Never print secrets or include them in chat, logs, diffs, or examples. Recognizable JSON credentials block remote upload; this does not guarantee arbitrary Markdown or plugin assets are secret-free.

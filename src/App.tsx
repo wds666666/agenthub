@@ -291,6 +291,16 @@ function Inventory({ onChanged, onNotify }: { onChanged: () => void; onNotify: (
   const [loadingRule, setLoadingRule] = useState(false);
   const [detail, setDetail] = useState<CapabilityDetail | null>(null);
   const [loadingDetail, setLoadingDetail] = useState("");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [batchCandidate, setBatchCandidate] = useState<Capability[] | null>(null);
+  const [deleteBackup, setDeleteBackup] = useState("");
+  const keyOf = (item: Capability) => `${item.kind}:${item.id}`;
+  const toggleSelection = (group: Capability[]) => setSelected((current) => {
+    const next = new Set(current);
+    const clear = group.every((item) => next.has(keyOf(item)));
+    group.forEach((item) => clear ? next.delete(keyOf(item)) : next.add(keyOf(item)));
+    return next;
+  });
   const [deleteCandidate, setDeleteCandidate] = useState<Capability | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [scanItems, setScanItems] = useState<ScanItem[] | null>(null);
@@ -353,9 +363,22 @@ function Inventory({ onChanged, onNotify }: { onChanged: () => void; onNotify: (
     setDeleting(true); setLoadError("");
     try {
       const result = await api.deleteCapability(deleteCandidate.kind, deleteCandidate.id);
-      setDeleteCandidate(null); setDetail(null); loadInventory(); onChanged();
+      setDeleteCandidate(null); setDetail(null); setSelected((current) => { const next = new Set(current); next.delete(keyOf(deleteCandidate)); return next; }); loadInventory(); onChanged();
       const failed = result.auto_sync.filter((outcome) => outcome.error);
       onNotify(failed.length ? `${t("toast.capabilityDeletedAutoFailed")} ${failed.map((outcome) => t(`targets.${outcome.target}`)).join("、")}` : t("toast.capabilityDeleted"));
+    } catch (value) { setLoadError(String(value)); }
+    finally { setDeleting(false); }
+  };
+  const removeBatch = async () => {
+    if (!batchCandidate) return;
+    setDeleting(true); setLoadError("");
+    try {
+      const result = await api.deleteCapabilities(batchCandidate.map(({ kind, id }) => ({ kind, id })));
+      setBatchCandidate(null); setSelected(new Set()); setDetail(null); setDeleteBackup(result.backup_path);
+      loadInventory(); onChanged();
+      const failed = result.auto_sync.filter((outcome) => outcome.error);
+      if (result.auto_sync_error) setLoadError(result.auto_sync_error);
+      onNotify(failed.length || result.auto_sync_error ? t("toast.capabilityDeletedAutoFailed") : `${result.deleted.length} ${t("inventory.batchDeleted")}`);
     } catch (value) { setLoadError(String(value)); }
     finally { setDeleting(false); }
   };
@@ -395,6 +418,13 @@ function Inventory({ onChanged, onNotify }: { onChanged: () => void; onNotify: (
         }
       />
       {loadError && <div className="inline-error" role="alert"><Activity size={18} /><span>{loadError}</span></div>}
+      <div className="inventory-selection material" role="group" aria-label={t("inventory.batchManage")}>
+        <span role="status">{t("inventory.selectedCount")} <strong>{items.filter((item) => selected.has(keyOf(item))).length}</strong></span>
+        <Button variant="quiet" disabled={deleting || !filtered.length} onClick={() => toggleSelection(filtered)}>{filtered.length > 0 && filtered.every((item) => selected.has(keyOf(item))) ? t("inventory.clearVisible") : t("inventory.selectVisible")}</Button>
+        <Button variant="quiet" disabled={deleting || !selected.size} onClick={() => setSelected(new Set())}>{t("init.clear")}</Button>
+        <Button variant="danger" disabled={deleting || !items.some((item) => selected.has(keyOf(item)))} onClick={() => setBatchCandidate(items.filter((item) => selected.has(keyOf(item))))}><Trash2 size={16} />{t("inventory.deleteSelected")}</Button>
+      </div>
+      {deleteBackup && <div className="warning-banner" role="status"><ShieldCheck size={17} /><span>{t("inventory.deleteBackup")} <code>{deleteBackup}</code></span></div>}
       <div className="inventory-grid">
         {kindMeta.map(({ id, icon: KindIcon, accent }) => {
           const group = filtered.filter((item) => item.kind === id);
@@ -403,11 +433,12 @@ function Inventory({ onChanged, onNotify }: { onChanged: () => void; onNotify: (
               <header className="inventory-card__header">
                 <span className="inventory-card__icon"><KindIcon size={20} /></span>
                 <div><h2>{t(`kinds.${id}`)}</h2><p>{group.length}</p></div>
-                <span className="count-badge">{group.length}</span>
+                <Button variant="quiet" disabled={deleting || !group.length} onClick={() => toggleSelection(group)} aria-label={`${group.length > 0 && group.every((item) => selected.has(keyOf(item))) ? t("inventory.clearCategory") : t("inventory.selectCategory")} ${t(`kinds.${id}`)}`}>{group.length > 0 && group.every((item) => selected.has(keyOf(item))) ? t("inventory.clearCategory") : t("inventory.selectCategory")}</Button>
               </header>
               <div className="capability-list">
                 {group.map((item) => (
-                  <article className="capability-row" key={item.id}>
+                  <article className={`capability-row ${selected.has(keyOf(item)) ? "is-selected" : ""}`} key={item.id}>
+                    <input className="capability-select" type="checkbox" aria-label={`${t("inventory.selectItem")} ${t(`kinds.${item.kind}`)} ${item.display_name}`} checked={selected.has(keyOf(item))} disabled={deleting} onChange={() => toggleSelection([item])} />
                     <button className="capability-open" type="button" disabled={Boolean(loadingDetail)} onClick={() => void openDetail(item)} aria-label={`${t("inventory.viewDetails")} ${item.display_name}`}>
                       <span className="capability-row__glyph">{loadingDetail === `${item.kind}:${item.id}` ? <RefreshCw className="spin" size={16} /> : <KindIcon size={17} />}</span>
                       <span className="capability-row__copy">
@@ -435,6 +466,11 @@ function Inventory({ onChanged, onNotify }: { onChanged: () => void; onNotify: (
       </div>
       {editor && <RuleEditor key={`${editor.create ? "new" : "edit"}-${editor.document.id}`} initial={editor.document} create={editor.create} imported={editor.imported} onClose={() => setEditor(null)} onSaved={saved} />}
       {detail && <CapabilityDetailDialog detail={detail} onClose={() => setDetail(null)} onDelete={() => setDeleteCandidate(detail.capability)} onEditRule={detail.capability.kind === "rule" ? () => { const id = detail.capability.id; setDetail(null); void editRule(id); } : undefined} />}
+      <Dialog open={batchCandidate !== null} onClose={() => !deleting && setBatchCandidate(null)} title={t("inventory.batchTitle")} actions={<><Button variant="secondary" disabled={deleting} onClick={() => setBatchCandidate(null)}>{t("common.cancel")}</Button><Button variant="danger" disabled={deleting} onClick={() => void removeBatch()}>{deleting ? <RefreshCw className="spin" size={16} /> : <Trash2 size={16} />}{t("inventory.deleteSelected")} ({batchCandidate?.length ?? 0})</Button></>}>
+        <p>{t("inventory.batchBody")}</p>
+        <ul className="batch-delete-list">{batchCandidate?.map((item) => <li key={keyOf(item)}><strong>{item.display_name}</strong><span>{t(`kinds.${item.kind}`)} · {item.id}</span></li>)}</ul>
+        {loadError && <div className="inline-error" role="alert">{loadError}</div>}
+      </Dialog>
       <Dialog open={Boolean(deleteCandidate)} onClose={() => !deleting && setDeleteCandidate(null)} title={t("inventory.deleteTitle")} actions={<><Button variant="secondary" disabled={deleting} onClick={() => setDeleteCandidate(null)}>{t("common.cancel")}</Button><Button variant="danger" disabled={deleting} onClick={() => void removeCapability()}>{deleting ? <RefreshCw className="spin" size={16} /> : <Trash2 size={16} />}{t("inventory.deleteAction")}</Button></>}>
         <p>{t("inventory.deleteBody")}</p>
         <div className="delete-capability-preview"><span className="target-tab__mark">{deleteCandidate ? kindMeta.find((kind) => kind.id === deleteCandidate.kind)?.id.slice(0, 2).toUpperCase() : ""}</span><span><strong>{deleteCandidate?.display_name}</strong><code>{deleteCandidate?.id}</code></span></div>
@@ -1105,7 +1141,7 @@ function EmptyState({ icon: EmptyIcon, title, body, compact = false }: { icon: I
 }
 
 function ImportSourcePicker({ items, available, selected, source, onSource, onSelected, busy }: { items: ScanItem[]; available: ScanItem[]; selected: Set<string>; source: string; onSource: (source: string) => void; onSelected: (selected: Set<string>) => void; busy: boolean }) {
-  const sources = [...new Set(items.map((item) => item.source))];
+  const sources = ["agents", "cursor", "codex", "claude", ...new Set(items.map((item) => item.source).filter((id) => !["agents", "cursor", "codex", "claude"].includes(id)))];
   const chosen = items.filter((item) => selected.has(item.id));
   const unique = new Set(chosen.map((item) => `${item.kind}:${item.digest}`)).size;
   const current = available.filter((item) => source === "all" || item.source === source);
@@ -1113,6 +1149,7 @@ function ImportSourcePicker({ items, available, selected, source, onSource, onSe
     <div className="scan-kind-tabs scan-source-tabs" role="group" aria-label={t("init.sources")}>
       {["all", ...sources].map((id) => { const group = available.filter((item) => id === "all" || item.source === id); return <button type="button" aria-label={`${id === "all" ? t("init.allSources") : targetMeta.some((target) => target.id === id) ? t(`targets.${id}`) : id} ${group.filter((item) => selected.has(item.id)).length} / ${group.length}`} aria-pressed={source === id} className={source === id ? "is-selected" : ""} disabled={busy} key={id} onClick={() => onSource(id)}><span><strong>{id === "all" ? t("init.allSources") : targetMeta.some((target) => target.id === id) ? t(`targets.${id}`) : id}</strong><small>{group.filter((item) => selected.has(item.id)).length} / {group.length}</small></span></button>; })}
     </div>
+    <p className="import-source-hint">{t("init.scannedCount")} <strong>{items.filter((item) => source === "all" || item.source === source).length}</strong> · {t("init.newCount")} <strong>{current.length}</strong>{items.every((item) => source !== "all" && item.source !== source) && <span> · {t("init.emptySource")}</span>}</p>
     <div className="scan-group-toolbar"><p role="status">{t("init.totalSelected")} <strong>{selected.size}</strong> · {t("init.uniqueSelected")} <strong>{unique}</strong><small>{t("init.selectionHint")}</small></p><Button variant="quiet" disabled={busy || !current.length} onClick={() => { const next = new Set(selected); const allSelected = current.every((item) => next.has(item.id)); current.forEach((item) => allSelected ? next.delete(item.id) : next.add(item.id)); onSelected(next); }}>{current.length && current.every((item) => selected.has(item.id)) ? t("init.clearSource") : t("init.selectSource")}</Button></div>
   </section>;
 }

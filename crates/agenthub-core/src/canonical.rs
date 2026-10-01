@@ -1,8 +1,8 @@
 use crate::models::ScanItem;
 use crate::{
     models::{
-        Capability, CapabilityDetail, CapabilityFile, CapabilityKind, McpServer, RuleDocument,
-        Target,
+        Capability, CapabilityDetail, CapabilityFile, CapabilityKey, CapabilityKind, McpServer,
+        RuleDocument, Target,
     },
     paths::AgentHubPaths,
 };
@@ -172,6 +172,68 @@ pub fn delete_capability(paths: &AgentHubPaths, kind: CapabilityKind, id: &str) 
     paths.assert_inside_root(&target)?;
     fs::remove_dir_all(target)?;
     Ok(())
+}
+
+/// Archive a fully validated batch before callers reconcile any host.
+pub fn delete_capabilities(paths: &AgentHubPaths, selected: &[CapabilityKey]) -> Result<PathBuf> {
+    anyhow::ensure!(!selected.is_empty(), "select at least one capability");
+    let mut seen = std::collections::BTreeSet::new();
+    let mut targets = Vec::new();
+    for key in selected {
+        anyhow::ensure!(valid_id(&key.id), "invalid capability id");
+        anyhow::ensure!(seen.insert(key), "duplicate capability selection");
+        let root = match key.kind {
+            CapabilityKind::Skill => &paths.skills,
+            CapabilityKind::Mcp => &paths.mcp,
+            CapabilityKind::Plugin => &paths.plugins,
+            CapabilityKind::Rule => &paths.rules,
+        };
+        anyhow::ensure!(
+            fs::symlink_metadata(root)?.file_type().is_dir(),
+            "invalid library directory"
+        );
+        let target = root.join(&key.id);
+        anyhow::ensure!(
+            fs::symlink_metadata(&target)?.file_type().is_dir(),
+            "capability not found or is a symlink"
+        );
+        paths.assert_inside_root(&target)?;
+        targets.push(target);
+    }
+    let backup = paths
+        .backups
+        .join(format!("library-delete-{}", uuid::Uuid::new_v4()));
+    paths.assert_inside_root(&backup)?;
+    fs::create_dir(&backup)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&backup, fs::Permissions::from_mode(0o700))?;
+    }
+    let mut moved: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let result = (|| -> Result<()> {
+        for (key, target) in selected.iter().zip(&targets) {
+            let destination = backup.join(key.kind.as_str()).join(&key.id);
+            fs::create_dir_all(destination.parent().context("missing backup parent")?)?;
+            fs::rename(target, &destination)?;
+            moved.push((target.clone(), destination));
+        }
+        Ok(())
+    })();
+    if let Err(error) = result {
+        let mut failed = false;
+        for (target, destination) in moved.iter().rev() {
+            failed |= fs::rename(destination, target).is_err();
+        }
+        anyhow::ensure!(
+            !failed,
+            "library deletion failed and restoration is incomplete; recover files from {}: {error}",
+            backup.display()
+        );
+        let _ = fs::remove_dir_all(&backup);
+        return Err(error.context("library deletion failed; batch restored"));
+    }
+    Ok(backup)
 }
 
 fn redact_json_preview(preview: &str) -> String {

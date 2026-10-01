@@ -795,3 +795,73 @@ fn reset_rebuilds_empty_state_and_preserves_host_and_private_recovery() {
         );
     }
 }
+
+#[test]
+fn bulk_library_delete_validates_all_then_archives_uncommitted_content() {
+    use agenthub_core::models::CapabilityKey;
+    let (_temp, hub) = fixture();
+    seed(&hub);
+    let skill = CapabilityKey {
+        kind: CapabilityKind::Skill,
+        id: "review".into(),
+    };
+    let missing = CapabilityKey {
+        kind: CapabilityKind::Rule,
+        id: "missing".into(),
+    };
+    assert!(canonical::delete_capabilities(&hub.paths, &[skill.clone(), missing]).is_err());
+    assert!(hub.paths.skills.join("review/SKILL.md").is_file());
+    assert!(canonical::delete_capabilities(&hub.paths, &[skill.clone(), skill.clone()]).is_err());
+    let backup = canonical::delete_capabilities(
+        &hub.paths,
+        &[
+            skill,
+            CapabilityKey {
+                kind: CapabilityKind::Rule,
+                id: "safe".into(),
+            },
+        ],
+    )
+    .unwrap();
+    assert!(!hub.paths.skills.join("review").exists());
+    assert!(!hub.paths.rules.join("safe").exists());
+    assert!(hub.paths.mcp.join("local/server.json").is_file());
+    assert!(backup.join("skill/review/SKILL.md").is_file());
+    assert!(backup.join("rule/safe/rule.md").is_file());
+    assert!(!git::status(&hub.paths.root)
+        .unwrap()
+        .contains("library-delete"));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            fs::metadata(backup).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn bulk_library_delete_rejects_symlink_without_deleting_other_selection() {
+    use agenthub_core::models::CapabilityKey;
+    let (temp, hub) = fixture();
+    seed(&hub);
+    let external = temp.path().join("external");
+    fs::create_dir(&external).unwrap();
+    fs::write(external.join("SKILL.md"), "keep").unwrap();
+    std::os::unix::fs::symlink(&external, hub.paths.skills.join("linked")).unwrap();
+    let selected = [
+        CapabilityKey {
+            kind: CapabilityKind::Skill,
+            id: "review".into(),
+        },
+        CapabilityKey {
+            kind: CapabilityKind::Skill,
+            id: "linked".into(),
+        },
+    ];
+    assert!(canonical::delete_capabilities(&hub.paths, &selected).is_err());
+    assert!(hub.paths.skills.join("review/SKILL.md").is_file());
+    assert!(external.join("SKILL.md").is_file());
+}

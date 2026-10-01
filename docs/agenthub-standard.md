@@ -20,6 +20,10 @@ projections/**
 
 Git tracks only `skills/`, `plugins/`, `rules/`, `mcp/`, and `agenthub.toml`. Runtime directories and `*.log` are ignored.
 
+Git is the portable content store, not a machine backup. Skill resources and plugin payload dependencies accompany their manifests; host scan paths, enabled targets, automatic-sync profiles, import selection, transaction records, SQLite, credentials, encryption keys, projections, local deletion backups and repository connection/author settings stay on each device. Host paths displayed by discovery are not persisted as portable content. MCP command paths and environment references can still need device-specific setup; synchronization does not make installed executables or credentials portable. Remote upload checks all reachable history for excluded root paths and recognizable JSON secrets, but arbitrary payload content still needs review.
+
+Bulk library deletion first validates every `(kind, id)`, then renames directories into `backups/library-delete-<uuid>/<kind>/<id>` on the same filesystem. A staging failure restores moved directories. Successful archives stay local (not Git-tracked) for recovery of uncommitted content; saving a version records the deletions. Host synchronization runs only after the complete batch.
+
 ## Versioned IR
 
 Every JSON manifest contains `schemaVersion: 1`.

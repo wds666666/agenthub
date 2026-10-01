@@ -316,7 +316,7 @@ code, pre { font-family: var(--mono); font-variant-ligatures: none; }
 .sync-domain-constraint { display: flex; align-items: flex-start; gap: 9px; padding: 13px; color: var(--ink-secondary); font-size: 10px; line-height: 1.5; background: var(--amber-soft); border-radius: 10px; }
 .sync-domain-constraint svg { flex: none; color: var(--amber); }
 .capability-list { max-height: 390px; padding: 8px; overflow: auto; scrollbar-width: thin; }
-.capability-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 4px; min-height: 60px; border-radius: 12px; transition: background 160ms ease; }
+.capability-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 4px; min-height: 60px; border-radius: 12px; transition: background 160ms ease; }
 .capability-row:hover { background: var(--material-inset); }
 .capability-open { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto 16px; align-items: center; gap: 9px; min-width: 0; min-height: 60px; padding: 8px 7px 8px 10px; text-align: left; background: transparent; border: 0; border-radius: 12px; cursor: pointer; }
 .capability-open:hover { color: var(--blue); }
@@ -803,3 +803,12 @@ code, pre { font-family: var(--mono); font-variant-ligatures: none; }
 .scan-source-tabs button { flex: 1 1 120px; }
 .import-sources .scan-group-toolbar p { margin: 0; }
 .import-sources .scan-group-toolbar small { display: block; margin-top: 6px; color: var(--ink-secondary); }
+
+.inventory-selection { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 12px 16px; margin-bottom: 16px; }
+.inventory-selection > span { margin-right: auto; color: var(--ink-secondary); font-size: 13px; }
+.capability-select { margin: 0 6px; width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
+.capability-row.is-selected { background: var(--material-inset); }
+.batch-delete-list { list-style: none; padding: 0; max-height: 280px; overflow-y: auto; }
+.batch-delete-list li { display: flex; flex-direction: column; gap: 4px; padding: 10px; border-bottom: 1px solid var(--line); }
+.batch-delete-list li span, .import-source-hint { color: var(--ink-secondary); font-size: 12px; }
+.scan-source-tabs button { min-width: 0; }

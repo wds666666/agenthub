@@ -99,3 +99,39 @@ it("keeps two Cursor and one Codex selections across source filters", async () =
   fireEvent.click(screen.getByRole("button", { name: /导入所选并完成/ }));
   await waitFor(() => expect(finish).toHaveBeenCalledWith(["cursor-1", "cursor-2", "codex-1"]));
 });
+
+it("shows all supported import sources even when only Claude has discoveries", async () => {
+  vi.spyOn(api, "dashboard").mockResolvedValue({ initialized: false, inventory: {}, enabled_targets: [], auto_sync_targets: [], dirty: false, recent_transactions: [] });
+  vi.spyOn(api, "scan").mockResolvedValue([{ id: "claude-only", source: "claude", path: "/h/.claude/skills/review", digest: "one", kind: "skill", selected: false, importable: true }]);
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: /开始全局扫描/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /Codex 0 \/ 0/ }));
+  expect(screen.getByRole("button", { name: /Cursor 0 \/ 0/ })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /共享 Agents 0 \/ 0/ })).toBeInTheDocument();
+  expect(screen.getByText(/此来源未发现资源/)).toBeInTheDocument();
+});
+
+it("preserves cross-kind selection through search and confirms the exact batch", async () => {
+  vi.spyOn(api, "dashboard").mockResolvedValue({ initialized: true, inventory: { skill: 1, rule: 1 }, enabled_targets: [], auto_sync_targets: [], dirty: false, recent_transactions: [] });
+  const capabilities = [
+    { id: "same", kind: "skill" as const, display_name: "Review skill", digest: "skill", path: "/hub/skills/same", compatible_targets: [] },
+    { id: "same", kind: "rule" as const, display_name: "Safety rule", digest: "rule", path: "/hub/rules/same", compatible_targets: [] },
+  ];
+  const inventory = vi.spyOn(api, "inventory").mockResolvedValue(capabilities);
+  const remove = vi.spyOn(api, "deleteCapabilities").mockResolvedValue({ deleted: capabilities.map(({ kind, id }) => ({ kind, id })), backup_path: "/hub/backups/library-delete-test", auto_sync: [] });
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: /我的能力库/ }));
+  fireEvent.click(await screen.findByRole("button", { name: "选择本类 Skills" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "搜索能力" }), { target: { value: "Safety" } });
+  fireEvent.click(screen.getByRole("button", { name: "选择当前结果" }));
+  expect(screen.getByRole("status")).toHaveTextContent("已选择 2");
+  fireEvent.click(screen.getByRole("button", { name: "删除所选能力" }));
+  expect(remove).not.toHaveBeenCalled();
+  const dialog = screen.getByRole("dialog");
+  expect(dialog).toHaveTextContent("Review skill");
+  expect(dialog).toHaveTextContent("Safety rule");
+  inventory.mockResolvedValue([]);
+  fireEvent.click(screen.getByRole("button", { name: "删除所选能力 (2)" }));
+  await waitFor(() => expect(remove).toHaveBeenCalledWith([{ kind: "skill", id: "same" }, { kind: "rule", id: "same" }]));
+  expect(await screen.findByText("/hub/backups/library-delete-test")).toBeInTheDocument();
+});

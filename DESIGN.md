@@ -64,3 +64,5 @@ Shared owners are Button, Dialog, Toast, SearchField, StatusBadge, PageHeader, m
 
 Remote versions and reset reuse material cards, field, Button, inline-error and Dialog. Quick cleanup is a danger action separated from rescan. Reset uses typed confirmation and exact consequences; connection status and upload failures remain readable inline. Existing tokens remain authoritative.
 Import source navigation uses the existing scan tab visual family with toggle-button semantics, localized tool names, selected/available counters and a persistent total/unique selection summary. It precedes capability categories and wraps at narrow widths.
+
+Library selection uses persistent row checkboxes and a wrapping toolbar with selected count, visible-result/category shortcuts, clear and a named danger action. Confirmation lists every selected resource; a successful batch leaves a readable recovery path. Import source buttons always include all supported tools, wrap within narrow dialogs, and separate discovered/new-resource counts. No new color or component vocabulary is introduced.

@@ -325,6 +325,20 @@ pub struct CapabilityDeleteResult {
     pub auto_sync: Vec<AutoSyncOutcome>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct CapabilityKey {
+    pub kind: CapabilityKind,
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CapabilityBatchDeleteResult {
+    pub deleted: Vec<CapabilityKey>,
+    pub backup_path: PathBuf,
+    pub auto_sync: Vec<AutoSyncOutcome>,
+    pub auto_sync_error: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ScanImportResult {
     pub imported: Vec<String>,
