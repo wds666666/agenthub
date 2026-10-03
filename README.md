@@ -47,3 +47,9 @@ CLI 同样支持 `agenthub git connect <url> --branch main`、`git remote-status
 我的能力库支持跨类别多选、选择当前搜索结果、选择本类及取消选择。删除前列出全部内容，成功后显示本机恢复副本路径；已启用目标统一同步一次。删除仍是未提交变更，保存版本后才记录并尝试远端同步。
 
 Git 内容与设备状态的划分见 [Canonical 存储标准](docs/agenthub-standard.md)。项目管理 skill 已整理，含 [选择与恢复](skills/agenthub-manager/references/selection.md) 和 [存储与远端同步](skills/agenthub-manager/references/storage.md)；不会将保护标记解释为插件无法读取或格式不公开。
+
+## 构建产物与发行策略
+
+默认运行 **Build packages**（`.github/workflows/release.yml`）只上传 Windows/Ubuntu 的 Actions 临时产物，不创建发行版。产物保留 14 天，下载需要登录 GitHub，直接下载链接在构建摘要中。仅在用户明确同意具体发行版时才开启 `publish_release=true`；日常修复、编译及下载链接请求不会发布 Release。
+
+当前已实现功能与尚未完成内容见 [0.1.3 发行说明](docs/releases/v0.1.3.md)，包括完整 Plugin 导入与宿主同步仍未完成的限制。
