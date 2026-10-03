@@ -1,0 +1,90 @@
+name: Project checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  documents:
+    name: Documents and metadata
+    runs-on: ubuntu-24.04
+    outputs:
+      code: ${{ steps.changes.outputs.code }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Determine check scope
+        id: changes
+        run: |
+          python3 - <<'PYTHON'
+          import json, os, subprocess
+          event = json.load(open(os.environ["GITHUB_EVENT_PATH"]))
+          base = event.get("pull_request", {}).get("base", {}).get("sha") or event.get("before")
+          head = event.get("pull_request", {}).get("head", {}).get("sha") or "HEAD"
+          if base and set(base) != {"0"}:
+              files = subprocess.check_output(["git", "diff", "--name-only", base, head], text=True).splitlines()
+          else:
+              files = subprocess.check_output(["git", "ls-files"], text=True).splitlines()
+          prefixes = ("src/", "src-tauri/", "crates/")
+          names = {"Cargo.toml", "Cargo.lock", "package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "vite.config.ts", "index.html", "eslint.config.js"}
+          code = any(p.startswith(prefixes) or p in names or p.startswith("tsconfig") or (p.startswith("scripts/") and p.endswith(".ps1")) for p in files)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"code={str(code).lower()}\n")
+          PYTHON
+      - name: Check document links and package versions
+        run: python3 scripts/check_project.py
+      - name: Check workflow syntax
+        run: |
+          set -euo pipefail
+          curl -fsSL -o "$RUNNER_TEMP/actionlint.tgz" \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          tar -xzf "$RUNNER_TEMP/actionlint.tgz" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" .github/workflows/*.yml
+
+  quality:
+    name: Application checks
+    needs: documents
+    if: ${{ needs.documents.outputs.code == 'true' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libwebkit2gtk-4.1-dev libxdo-dev \
+            libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 12.3.4
+          run_install: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: linux-x64
+      - name: Verify application
+        run: |
+          set -euo pipefail
+          pnpm install --frozen-lockfile
+          pnpm lint
+          pnpm test
+          pnpm build
+          cargo fmt --all -- --check
+          cargo clippy -p agenthub-core -p agenthub-cli --all-targets -- -D warnings
+          cargo test -p agenthub-core
+          cargo check -p agenthub-desktop

@@ -1,27 +1,40 @@
-# Development and verification
+# 开发与编译
 
-## Ubuntu 24.04 / WSL2
+先安装 Node.js 24、pnpm 12、Rust stable 和系统 Git。项目使用 Tauri 2，原生依赖按平台安装。
 
-Install the Tauri 2 native dependencies from a terminal where you can enter the sudo password:
+## Ubuntu / WSL2
 
 ```bash
-sudo apt-get update
 sudo apt-get install -y build-essential libwebkit2gtk-4.1-dev libxdo-dev \
   libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+cargo install tauri-cli --version 2.12.0 --locked
+pnpm install --frozen-lockfile
+pnpm tauri dev
 ```
 
-Install Rust stable, rustfmt, clippy, and the Tauri CLI:
+本地安装包与程序：
 
 ```bash
-rustup toolchain install stable --profile minimal
-rustup component add rustfmt clippy
-cargo install tauri-cli --version '^2' --locked
+cargo build --release -p agenthub-cli
+cargo tauri build --bundles deb
 ```
 
-Then run:
+输出位于 `target/release/agenthub-desktop`、`target/release/agenthub` 和 `target/release/bundle/deb/`。
+
+## Windows
+
+安装 MSVC Rust 工具链、Microsoft C++ Build Tools、WebView2 开发依赖和 Tauri CLI。执行：
+
+```powershell
+./scripts/package-windows.ps1
+```
+
+生成 NSIS、MSI、桌面便携版、CLI 和校验文件，位于 `target/release/` 及其 `bundle/` 子目录。安装版包含离线 WebView2；桌面程序采用 GUI 子系统，CLI 保留控制台子系统。当前安装包未签名。
+
+## 检查
 
 ```bash
-pnpm install
+python3 scripts/check_project.py
 pnpm lint
 pnpm test
 pnpm build
@@ -29,47 +42,8 @@ cargo fmt --all -- --check
 cargo clippy -p agenthub-core -p agenthub-cli --all-targets -- -D warnings
 cargo test -p agenthub-core
 cargo check -p agenthub-desktop
-cargo tauri build
 ```
 
-All adapter integration tests must use a temporary `HOME`. Never run `sync` during development without inspecting its generated Plan and confirming that `HOME` points to a disposable fixture.
+宿主测试使用 `TempDir` 与显式 `AgentHubPaths::for_home`，不使用真实用户目录。`AGENTHUB_HOME` 仅改变能力库位置，不会隔离宿主扫描目录。涉及清理、同步或恢复的测试必须使用临时宿主布局。
 
-## Windows 10/11 x64 packages
-
-Install the current Git for Windows, Node.js 24, pnpm 12, Rust stable with the MSVC toolchain, Microsoft C++ Build Tools, and WebView2 development prerequisites. Install the matching Tauri CLI with `cargo install tauri-cli --version 2.12.0 --locked`. The application uses Git at runtime for Canonical history, so `git.exe` must remain available on `PATH` after installation.
-
-Build both the current-user NSIS installer and MSI package from PowerShell:
-
-```powershell
-./scripts/package-windows.ps1
-```
-
-Use `-SkipInstall` when the lockfile dependencies are already installed, or `-Bundle nsis` / `-Bundle msi` to build one installer type. Outputs are written to:
-
-```text
-target/release/bundle/nsis/*-setup.exe
-target/release/bundle/msi/*.msi
-target/release/bundle/SHA256SUMS.windows.txt
-target/release/agenthub.exe
-target/release/agenthub-desktop.exe
-```
-
-The installer is per-user and does not require administrator rights. It includes the MSVC runtime, the offline WebView2 installer, Chinese and English NSIS strings, the desktop application, and the `agenthub.exe` CLI sidecar. The larger offline bundle prevents installation from depending on a WebView2 download. Release `agenthub-desktop.exe` uses the Windows GUI subsystem and must not open a console; `agenthub.exe` remains a console CLI. The packaging script reads both PE headers and rejects a desktop Console subsystem or a CLI GUI subsystem regression.
-
-The Windows-only build runs through `.github/workflows/windows-build.yml` for manual CI dispatches. The combined **Build packages** workflow remains at `.github/workflows/release.yml` and defaults to build-only: `gh workflow run release.yml --ref main` verifies/builds both platforms and uploads temporary `linux-x64` and `windows-x64` artifacts. Each successful upload adds its direct artifact download link to the run summary. Artifacts expire after 14 days and downloading them requires a GitHub login; report both the artifact links and run URL. A build request or request for a download link is not permission to create a Release.
-
-Only after explicit user approval for a specific release, dispatch `gh workflow run release.yml --ref main -f publish_release=true -f tag=vX.Y.Z`. The tag must match the package version and `docs/releases/vX.Y.Z.md` must describe implemented features and known gaps. This builds the selected ref and creates the release at that exact commit; it refuses an existing release or a tag pointing elsewhere. Tag pushes do not trigger publication. Default builds have read-only repository permissions; only the explicitly enabled publish job gets write permission. Prior publication approval does not authorize later releases.
-
-Ubuntu 24.04 x64 produces a `.deb`, the desktop executable, and the CLI. AppImage is not produced: `linuxdeploy` cannot run on GitHub-hosted Ubuntu 24.04. Windows x64 produces NSIS, MSI, the portable desktop executable, and the CLI, plus SHA-256 checksums. Windows artifacts are unsigned in v0.1; SmartScreen may warn until an Authenticode certificate and timestamp service are configured. MSI generation also requires the Windows VBSCRIPT optional feature, which is enabled on standard GitHub-hosted Windows runners.
-
-Do not treat Linux-to-Windows cross-compilation as the release path. Tauri supports NSIS cross-compilation with caveats, but MSI/WiX remains Windows-only; the native Windows workflow is the reproducible source for both installers.
-
-Windows smoke testing must cover more than process startup:
-
-- launch the installed desktop app from Explorer and confirm no console window appears;
-- run initialization with empty, UTF-16/non-UTF-8, oversized, CRLF, duplicate-name, and Windows-reserved-name resources;
-- verify invalid discoveries are visible but not selectable and that a failed import leaves Canonical empty;
-- test user homes containing spaces and non-ASCII characters, and keep Canonical/WebView2 data on a writable local profile path rather than UNC or network storage;
-- run without Git on `PATH` and confirm Doctor reports the dependency instead of presenting an opaque process error;
-- inspect `%LOCALAPPDATA%/dev.agenthub.desktop/logs` after a successful run and a forced import failure, confirming secret values are redacted;
-- verify both NSIS and MSI install/uninstall, offline WebView2 provisioning, SmartScreen behavior for unsigned builds, and SHA-256 checksums.
+自动检查、临时构建与发布条件见 [工作流规则](workflow.md)。普通文档修改无需构建安装包；用户未指定版本号时，保留当前版本。

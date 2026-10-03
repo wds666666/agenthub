@@ -1,13 +1,20 @@
-# AgentHub repository contract
+# AgentHub 协作约定
 
-All changes must preserve the contracts in `docs/agenthub-standard.md`, `docs/architecture.md`, `docs/sync-contract.md`, `docs/security.md`, `DESIGN.md`, and `UX-CONTRACT.md`.
+修改前查阅 [架构](docs/architecture.md)、[存储标准](docs/agenthub-standard.md)、[同步契约](docs/sync-contract.md)、[安全边界](docs/security.md)、[设计规范](docs/design.md) 和 [交互契约](docs/ux-contract.md)。
 
-- AgentHub manages user-level global Skills, MCP, Plugins, and Rules only. Never scan a working directory or project configuration.
-- Canonical files are the content source of truth; SQLite is business state; backups are host transaction recovery.
-- Plan is read-only. Apply must back up, atomically project where possible, re-read, verify, and automatically roll back on failure.
-- Target adapters replace their writable capability domains while preserving unrelated host settings and read-only/vendor-managed resources.
-- Changes to architecture, schemas, adapter boundaries, security, or UX contracts require the relevant document to be updated first.
-- Tests that inspect host layouts must use an explicit temporary home directory. Never use the developer's real home.
-- Product copy uses i18n keys. Chinese is the default locale and English must remain structurally complete.
-- Build and publication policy: without the user's explicit approval for the specific release, never create/publish/update a GitHub Release, push a release tag, or dispatch a workflow with release publication enabled. Requests for builds, fixes or download links authorize Actions artifacts only. Return the run and temporary artifact download links, with expiry/login requirements. The package workflow defaults to build-only; release publication requires `publish_release=true` and explicit user approval. Do not treat a prior release approval as permission for later releases.
+- 仅管理用户级全局能力，不扫描或修改项目配置。
+- 能力文件是内容来源；SQLite 保存本机状态；备份用于恢复。变更预览只读，实际同步先备份、写入、验证，失败时恢复。
+- 保留工具的无关配置与官方管理的受保护资源。架构、适配、安全或交互边界变更，先更新相应文档。
+- 宿主布局测试使用显式临时用户目录，禁止对开发者真实目录执行同步或清理。
+- 产品文案使用 i18n，默认中文，英文键结构完整。中文说明与英文说明分别维护，首页保持简洁。
 
+## 验证、构建与发布
+
+遵循 [工作流规则](docs/workflow.md)：
+
+- 文档修改：检查文档链接、项目元数据和工作流；不默认生成安装包。
+- 代码修改：执行相应格式、静态检查和测试；用户要求下载或准备发行时再构建安装包。
+- 默认版本来自 `package.json`，与 Cargo、Tauri 保持一致。用户未指定新版本号时，沿用当前版本，不自动递增或改名。
+- 编译、修复、推送及下载链接请求，只授权构建 Actions 临时产物，不授权创建或更新发行版。返回运行页及下载链接，并说明过期时间和登录要求。
+- 每次发布均须用户明确同意。历史同意不授权后续发布；版本号不变的发行版替换也须明确同意。
+- 仅在用户明确要求替换当前发行版时，才可删除该发行版、移动对应标签并发布同版本的新构建；不得改动其他历史标签。

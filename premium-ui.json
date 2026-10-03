@@ -2,7 +2,10 @@
   "productType": "admin-tool",
   "designSource": "runtime-canonical",
   "runtimeTokens": "src/styles/tokens.css",
-  "designDocument": "DESIGN.md",
-  "uxContract": "UX-CONTRACT.md",
-  "locales": ["zh-CN", "en"]
+  "designDocument": "docs/design.md",
+  "uxContract": "docs/ux-contract.md",
+  "locales": [
+    "zh-CN",
+    "en"
+  ]
 }

@@ -1,0 +1,221 @@
+name: Build packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: "Target platform (uses the current version; never publishes)"
+        required: true
+        type: choice
+        options: [all, windows, linux]
+        default: all
+
+permissions:
+  contents: read
+
+concurrency:
+  group: packages-${{ github.ref }}-${{ inputs.platform }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Check documents and package metadata
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.metadata.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check project
+        id: metadata
+        run: python3 scripts/check_project.py --github-output
+
+  linux-x64:
+    needs: prepare
+    if: ${{ inputs.platform == 'all' || inputs.platform == 'linux' }}
+    env:
+      PACKAGE_VERSION: ${{ needs.prepare.outputs.version }}
+    name: Ubuntu x64 (deb + CLI)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libwebkit2gtk-4.1-dev libxdo-dev \
+            libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf file
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 12.3.4
+          run_install: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: linux-x64
+
+      - name: Install Tauri CLI
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin" /tmp/cargo-tauri-extract
+          curl -fsSL -o /tmp/cargo-tauri.tgz \
+            https://github.com/tauri-apps/tauri/releases/download/tauri-cli-v2.12.0/cargo-tauri-x86_64-unknown-linux-gnu.tgz
+          tar -xzf /tmp/cargo-tauri.tgz -C /tmp/cargo-tauri-extract
+          bin="$(find /tmp/cargo-tauri-extract -type f -name cargo-tauri -print -quit)"
+          test -n "$bin"
+          install -m 0755 "$bin" "$HOME/.local/bin/cargo-tauri"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          cargo-tauri --version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify
+        run: |
+          pnpm lint
+          pnpm test
+          cargo fmt --all -- --check
+          cargo clippy -p agenthub-core -p agenthub-cli --all-targets -- -D warnings
+          cargo test -p agenthub-core
+
+      - name: Build CLI and desktop bundles
+        run: |
+          set -euo pipefail
+          cargo build --release -p agenthub-cli
+          # ubuntu-24.04 runners cannot reliably run linuxdeploy (it is an AppImage,
+          # FUSE is blocked, and its bundled strip rejects modern glibc). Publish
+          # the .deb plus the raw executables instead of failing the release there.
+          cargo tauri build --bundles deb
+
+      - name: Collect Linux artifacts
+        run: |
+          set -euo pipefail
+          out=dist-release
+          mkdir -p "$out"
+          version="$PACKAGE_VERSION"
+          cp target/release/bundle/deb/*.deb "$out/"
+          cp target/release/agenthub "$out/agenthub-cli-${version}-linux-x64"
+          cp target/release/agenthub-desktop "$out/agenthub-desktop-${version}-linux-x64"
+          chmod +x "$out"/agenthub-*-linux-x64
+          (cd "$out" && sha256sum -- * > SHA256SUMS.linux.txt)
+          ls -l "$out"
+
+      - name: Upload Linux artifacts
+        id: upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-x64
+          if-no-files-found: error
+          retention-days: 14
+          path: dist-release/*
+
+      - name: Record temporary download link
+        shell: bash
+        env:
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+        run: |
+          printf '### Package download\n\n[Download temporary artifact](%s)\n\nAvailable for 14 days; GitHub sign-in required.\n' "$ARTIFACT_URL" >> "$GITHUB_STEP_SUMMARY"
+
+  windows-x64:
+    needs: prepare
+    if: ${{ inputs.platform == 'all' || inputs.platform == 'windows' }}
+    env:
+      PACKAGE_VERSION: ${{ needs.prepare.outputs.version }}
+    name: Windows x64 (NSIS + MSI + CLI)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 12.3.4
+          run_install: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: windows-x64
+
+      - name: Install Tauri CLI
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $zip = Join-Path $env:RUNNER_TEMP "cargo-tauri.zip"
+          $extract = Join-Path $env:RUNNER_TEMP "cargo-tauri"
+          Invoke-WebRequest -Uri "https://github.com/tauri-apps/tauri/releases/download/tauri-cli-v2.12.0/cargo-tauri-x86_64-pc-windows-msvc.zip" -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath $extract -Force
+          $bin = Get-ChildItem $extract -Recurse -Filter cargo-tauri.exe | Select-Object -First 1
+          if (-not $bin) { throw "cargo-tauri.exe was not found in the release archive" }
+          $destDir = Join-Path $env:USERPROFILE ".cargo\bin"
+          New-Item -ItemType Directory -Force -Path $destDir | Out-Null
+          Copy-Item $bin.FullName (Join-Path $destDir "cargo-tauri.exe") -Force
+          & "$destDir\cargo-tauri.exe" --version
+          if ($LASTEXITCODE -ne 0) { throw "Tauri CLI failed to start" }
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build and verify Windows packages
+        shell: pwsh
+        run: ./scripts/package-windows.ps1 -SkipInstall
+
+      - name: Collect Windows artifacts
+        shell: pwsh
+        run: |
+          $out = "dist-release"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          $version = $env:PACKAGE_VERSION
+          Copy-Item target/release/bundle/nsis/*-setup.exe $out
+          Copy-Item target/release/bundle/msi/*.msi $out
+          Copy-Item target/release/agenthub.exe "$out/agenthub-cli-$version-windows-x64.exe"
+          Copy-Item target/release/agenthub-desktop.exe "$out/agenthub-desktop-$version-windows-x64-portable.exe"
+          Get-ChildItem $out -File | ForEach-Object {
+            "$((Get-FileHash -Algorithm SHA256 $_.FullName).Hash.ToLowerInvariant())  $($_.Name)"
+          } | Set-Content -Encoding ascii "$out/SHA256SUMS.windows.txt"
+          Get-ChildItem $out
+
+      - name: Upload Windows artifacts
+        id: upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-x64
+          if-no-files-found: error
+          retention-days: 14
+          path: dist-release/*
+
+      - name: Record temporary download link
+        shell: bash
+        env:
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+        run: |
+          printf '### Package download\n\n[Download temporary artifact](%s)\n\nAvailable for 14 days; GitHub sign-in required.\n' "$ARTIFACT_URL" >> "$GITHUB_STEP_SUMMARY"
+
