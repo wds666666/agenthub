@@ -53,6 +53,42 @@ fn seed(hub: &AgentHub) {
 }
 
 #[test]
+fn portable_validation_checks_content_and_manifest_identity() {
+    let (_temp, hub) = fixture();
+    seed(&hub);
+    assert_eq!(canonical::validate(&hub.paths).unwrap().len(), 3);
+    let path = hub.paths.mcp.join("local/server.json");
+    let mut server: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    server["id"] = serde_json::json!("different");
+    fs::write(&path, serde_json::to_vec(&server).unwrap()).unwrap();
+    assert!(canonical::validate(&hub.paths)
+        .unwrap_err()
+        .to_string()
+        .contains("mcp local"));
+    server["id"] = serde_json::json!("local");
+    fs::write(&path, serde_json::to_vec(&server).unwrap()).unwrap();
+    fs::remove_file(hub.paths.skills.join("review/SKILL.md")).unwrap();
+    assert!(canonical::validate(&hub.paths)
+        .unwrap_err()
+        .to_string()
+        .contains("skill review"));
+}
+
+#[cfg(unix)]
+#[test]
+fn portable_validation_rejects_symlinks_before_sharing() {
+    let (temp, hub) = fixture();
+    seed(&hub);
+    let outside = temp.path().join("private.txt");
+    fs::write(&outside, "private").unwrap();
+    std::os::unix::fs::symlink(&outside, hub.paths.skills.join("review/leak")).unwrap();
+    assert!(canonical::validate(&hub.paths)
+        .unwrap_err()
+        .to_string()
+        .contains("symlink"));
+}
+
+#[test]
 fn scanner_is_strictly_user_global() {
     let (temp, hub) = fixture();
     let project = temp.path().join("work/project/.cursor/skills/evil");

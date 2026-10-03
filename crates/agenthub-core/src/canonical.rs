@@ -57,6 +57,98 @@ pub fn inventory(paths: &AgentHubPaths) -> Result<Vec<Capability>> {
     Ok(out)
 }
 
+/// Check portable structure before an external edit or merge is saved/shared.
+/// This does not execute payloads, evaluate instructions, or resolve credentials.
+pub fn validate(paths: &AgentHubPaths) -> Result<Vec<Capability>> {
+    let config: toml::Value = fs::read_to_string(paths.root.join("agenthub.toml"))?.parse()?;
+    anyhow::ensure!(
+        config
+            .get("schema_version")
+            .and_then(toml::Value::as_integer)
+            == Some(1),
+        "unsupported library schema"
+    );
+    for (root, kind) in [
+        (&paths.skills, CapabilityKind::Skill),
+        (&paths.mcp, CapabilityKind::Mcp),
+        (&paths.rules, CapabilityKind::Rule),
+        (&paths.plugins, CapabilityKind::Plugin),
+    ] {
+        anyhow::ensure!(
+            fs::symlink_metadata(root)?.file_type().is_dir(),
+            "invalid capability root"
+        );
+        for entry in fs::read_dir(root)? {
+            let entry = entry?;
+            let id = entry.file_name().to_string_lossy().into_owned();
+            anyhow::ensure!(
+                valid_id(&id) && entry.file_type()?.is_dir(),
+                "invalid capability directory: {id}"
+            );
+            let dir = entry.path();
+            for child in WalkDir::new(&dir).follow_links(false) {
+                let child = child?;
+                anyhow::ensure!(
+                    child.file_type().is_file() || child.file_type().is_dir(),
+                    "symlink or special file in {id}"
+                );
+            }
+            (|| -> Result<()> {
+                match kind {
+                    CapabilityKind::Skill => {
+                        let body = fs::read_to_string(dir.join("SKILL.md"))?;
+                        anyhow::ensure!(!body.trim().is_empty(), "empty SKILL.md");
+                    }
+                    CapabilityKind::Mcp => {
+                        let server: McpServer =
+                            serde_json::from_slice(&fs::read(dir.join("server.json"))?)?;
+                        validate_mcp(&server)?;
+                        anyhow::ensure!(server.id == id, "MCP id differs from directory");
+                    }
+                    CapabilityKind::Rule => {
+                        anyhow::ensure!(
+                            read_rule_dir(&dir)?.id == id,
+                            "Rule id differs from directory"
+                        );
+                    }
+                    CapabilityKind::Plugin => {
+                        let manifest: serde_json::Value =
+                            serde_json::from_slice(&fs::read(dir.join("agenthub.plugin.json"))?)?;
+                        anyhow::ensure!(
+                            manifest
+                                .get("schemaVersion")
+                                .and_then(serde_json::Value::as_u64)
+                                == Some(1),
+                            "unsupported Plugin schema"
+                        );
+                        anyhow::ensure!(
+                            manifest.get("id").and_then(serde_json::Value::as_str)
+                                == Some(id.as_str()),
+                            "Plugin id differs from directory"
+                        );
+                        let (format, source, _) = inspect_plugin(&dir.join("payload"))?;
+                        if let Some(value) = manifest.get("sourceFormat") {
+                            anyhow::ensure!(
+                                value.as_str() == Some(format),
+                                "Plugin source format differs from payload"
+                            );
+                        }
+                        if let Some(value) = manifest.get("sourceManifest") {
+                            anyhow::ensure!(
+                                value.as_str() == Some(source.as_str()),
+                                "Plugin source manifest differs from payload"
+                            );
+                        }
+                    }
+                }
+                Ok(())
+            })()
+            .with_context(|| format!("invalid {} {id}", kind.as_str()))?;
+        }
+    }
+    inventory(paths)
+}
+
 fn collect_dirs(root: &Path, kind: CapabilityKind, out: &mut Vec<Capability>) -> Result<()> {
     if !root.exists() {
         return Ok(());

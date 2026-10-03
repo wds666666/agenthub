@@ -3,6 +3,10 @@
   "bundle": {
     "targets": ["nsis", "msi"],
     "externalBin": ["binaries/agenthub"],
+    "resources": {
+      "../skills/agenthub-manager/": "skills/agenthub-manager/",
+      "../scripts/windows-cli.ps1": "windows-cli.ps1"
+    },
     "useLocalToolsDir": true,
     "windows": {
       "allowDowngrades": false,
@@ -12,12 +16,17 @@
         "silent": true
       },
       "nsis": {
+        "installerHooks": "windows/hooks.nsh",
         "installMode": "currentUser",
         "languages": ["SimpChinese", "English"],
         "displayLanguageSelector": false,
         "installerIcon": "icons/icon.ico",
         "uninstallerIcon": "icons/icon.ico",
         "startMenuFolder": "AgentHub"
+      },
+      "wix": {
+        "fragmentPaths": ["windows/cli.wxs"],
+        "componentGroupRefs": ["AgentHubCommandIntegration"]
       }
     }
   }

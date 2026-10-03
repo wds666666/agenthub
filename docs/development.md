@@ -29,7 +29,9 @@ cargo tauri build --bundles deb
 ./scripts/package-windows.ps1
 ```
 
-生成 NSIS、MSI、桌面便携版、CLI 和校验文件，位于 `target/release/` 及其 `bundle/` 子目录。安装版包含离线 WebView2；桌面程序采用 GUI 子系统，CLI 保留控制台子系统。当前安装包未签名。
+生成 NSIS、MSI、完整便携 ZIP、独立 CLI 和校验文件，位于 `target/release/` 及其 `bundle/` 子目录。安装版包含 CLI、管理 Skill 和离线 WebView2，注册当前用户的命令路径；桌面程序采用 GUI 子系统，CLI 保留控制台子系统。便携 ZIP 包含两者及命令定位脚本。Ubuntu `.deb` 同时安装 `/usr/bin/agenthub` 和管理 Skill。当前 Windows 安装包未签名。
+
+双平台构建在临时 Windows runner 上验证 NSIS/MSI 安装与卸载、同版本升级、长 PATH 保留、路径归属、旧环境下的 Skill 定位及 ZIP 完整性。`scripts/test-windows-packages.ps1` 仅允许隔离的 GitHub Actions 环境执行，避免修改开发者的环境变量。
 
 ## 检查
 
@@ -40,7 +42,7 @@ pnpm test
 pnpm build
 cargo fmt --all -- --check
 cargo clippy -p agenthub-core -p agenthub-cli --all-targets -- -D warnings
-cargo test -p agenthub-core
+cargo test -p agenthub-core -p agenthub-cli
 cargo check -p agenthub-desktop
 ```
 

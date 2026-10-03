@@ -144,6 +144,10 @@ pub fn commit(
     name: Option<&str>,
     email: Option<&str>,
 ) -> Result<String> {
+    crate::canonical::validate(&crate::paths::AgentHubPaths::new(
+        root.to_path_buf(),
+        root.to_path_buf(),
+    ))?;
     anyhow::ensure!(!message.trim().is_empty(), "commit message is required");
     ensure_repo(root)?;
     if let Some(v) = name {
@@ -297,7 +301,7 @@ fn reconcile(root: &Path, url: &str, branch: &str) -> Result<()> {
             ],
         )?;
         let paths = crate::paths::AgentHubPaths::new(root.to_path_buf(), root.to_path_buf());
-        crate::canonical::inventory(&paths).context("remote library validation failed")?;
+        crate::canonical::validate(&paths).context("remote library validation failed")?;
         run(
             root,
             &[
@@ -552,6 +556,39 @@ mod tests {
         assert!(fs::read_to_string(b.paths.skills.join("alpha/SKILL.md"))
             .unwrap()
             .contains("conflict B"));
+
+        // Exercise the manager skill's native resolution after the normal abort.
+        assert!(!b.paths.root.join(".git/MERGE_HEAD").exists());
+        let remote_head = run(&b.paths.root, &["rev-parse", "FETCH_HEAD"]).unwrap();
+        assert!(run(
+            &b.paths.root,
+            &["merge", "--no-ff", "--no-commit", &remote_head]
+        )
+        .is_err());
+        assert!(b.paths.root.join(".git/MERGE_HEAD").exists());
+        skill(
+            &b,
+            "alpha",
+            "Reviewed combination: conflict A and conflict B",
+        );
+        crate::canonical::validate(&b.paths).unwrap();
+        run(&b.paths.root, &["add", "skills/alpha/SKILL.md"]).unwrap();
+        assert!(
+            run(&b.paths.root, &["diff", "--name-only", "--diff-filter=U"])
+                .unwrap()
+                .is_empty()
+        );
+        run(&b.paths.root, &["diff", "--cached", "--check"]).unwrap();
+        run(&b.paths.root, &["commit", "-m", "Resolve alpha versions"]).unwrap();
+        let parents = run(&b.paths.root, &["rev-list", "--parents", "-n", "1", "HEAD"]).unwrap();
+        assert_eq!(parents.split_whitespace().count(), 3);
+        check_upload_history(&b.paths.root).unwrap();
+        sync_fixture(&b.paths.root, &remote).unwrap();
+        sync_fixture(&a.paths.root, &remote).unwrap();
+        assert!(fs::read_to_string(a.paths.skills.join("alpha/SKILL.md"))
+            .unwrap()
+            .contains("conflict A and conflict B"));
+        assert!(!temp.path().join("a/.cursor").exists());
     }
     #[test]
     fn push_failure_is_separate_from_a_saved_local_version() {
@@ -606,10 +643,10 @@ mod tests {
         let dir = hub.paths.mcp.join("test");
         fs::create_dir_all(&dir).unwrap();
         let config = dir.join("server.json");
-        fs::write(&config, r#"{"env":{"API_TOKEN":"private-value"}}"#).unwrap();
+        fs::write(&config, r#"{"schemaVersion":1,"id":"test","display_name":"Test","transport":"stdio","command":"server","env":{"API_TOKEN":"private-value"}}"#).unwrap();
         commit(&hub.paths.root, "Import sensitive config", None, None).unwrap();
         assert!(check_upload_history(&hub.paths.root).is_err());
-        fs::write(&config, r#"{"env":{"API_TOKEN":"${API_TOKEN}"}}"#).unwrap();
+        fs::write(&config, r#"{"schemaVersion":1,"id":"test","display_name":"Test","transport":"stdio","command":"server","env":{"API_TOKEN":"${API_TOKEN}"}}"#).unwrap();
         commit(&hub.paths.root, "Use environment reference", None, None).unwrap();
         let error = check_upload_history(&hub.paths.root)
             .unwrap_err()
@@ -620,7 +657,7 @@ mod tests {
         fs::create_dir_all(clean.paths.mcp.join("test")).unwrap();
         fs::write(
             clean.paths.mcp.join("test/server.json"),
-            r#"{"env":{"API_TOKEN":"${API_TOKEN}","PORT":"8000"}}"#,
+            r#"{"schemaVersion":1,"id":"test","display_name":"Test","transport":"stdio","command":"server","env":{"API_TOKEN":"${API_TOKEN}","PORT":"8000"}}"#,
         )
         .unwrap();
         commit(&clean.paths.root, "Environment reference only", None, None).unwrap();

@@ -25,6 +25,8 @@ Desktop **Versions** presents connection and retry state. Connect tests read acc
 
 A saved version commits locally, fetches and merges remote changes, then pushes. Sync requires a clean library working tree and never force-pushes. A concurrent remote update gets one additional reconciliation attempt. Conflicts abort the merge and preserve the local version for manual resolution; do not choose one device's content silently. Local commit success remains success even if remote upload fails: report the remote error and retry with Sync remote after correction.
 
+Read [conflict resolution](conflicts.md) for an Agent-assisted merge using exact fetched versions, file validation and the normal guarded sync. Read [backup migration](migration.md) before adopting an existing backup repository; unrelated content in old history may block it. Application authentication, automatic timers and semantic conflict resolution are not supplied by this skill.
+
 No polling or automatic host writes occur on remote reception. On another device, initialize/save its local library, connect the same dedicated repository/branch, synchronize, then review a host Plan before applying. Resource content and Git history are portable; each device chooses its own hosts and scope.
 
 Bulk library deletion archives uncommitted content at `backups/library-delete-<uuid>/<kind>/<id>`. This is a local file recovery copy, not a host transaction rollback entry. Committed content can also be recovered through Git; use a reviewed restore into new working-tree changes, never `reset --hard` as routine recovery.

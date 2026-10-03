@@ -91,7 +91,7 @@ jobs:
           pnpm test
           cargo fmt --all -- --check
           cargo clippy -p agenthub-core -p agenthub-cli --all-targets -- -D warnings
-          cargo test -p agenthub-core
+          cargo test -p agenthub-core -p agenthub-cli
 
       - name: Build CLI and desktop bundles
         run: |
@@ -136,7 +136,7 @@ jobs:
     if: ${{ inputs.platform == 'all' || inputs.platform == 'windows' }}
     env:
       PACKAGE_VERSION: ${{ needs.prepare.outputs.version }}
-    name: Windows x64 (NSIS + MSI + CLI)
+    name: Windows x64 (installers + complete portable ZIP)
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
@@ -188,6 +188,10 @@ jobs:
         shell: pwsh
         run: ./scripts/package-windows.ps1 -SkipInstall
 
+      - name: Verify command discovery, install, upgrade and uninstall
+        shell: pwsh
+        run: ./scripts/test-windows-packages.ps1
+
       - name: Collect Windows artifacts
         shell: pwsh
         run: |
@@ -197,7 +201,7 @@ jobs:
           Copy-Item target/release/bundle/nsis/*-setup.exe $out
           Copy-Item target/release/bundle/msi/*.msi $out
           Copy-Item target/release/agenthub.exe "$out/agenthub-cli-$version-windows-x64.exe"
-          Copy-Item target/release/agenthub-desktop.exe "$out/agenthub-desktop-$version-windows-x64-portable.exe"
+          Copy-Item target/release/bundle/*windows-x64-portable.zip $out
           Get-ChildItem $out -File | ForEach-Object {
             "$((Get-FileHash -Algorithm SHA256 $_.FullName).Hash.ToLowerInvariant())  $($_.Name)"
           } | Set-Content -Encoding ascii "$out/SHA256SUMS.windows.txt"

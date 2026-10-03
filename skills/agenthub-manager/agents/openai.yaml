@@ -1,4 +1,4 @@
 interface:
   display_name: "AgentHub 管理助手"
   short_description: "通过 AgentHub 管理全局 Skills、MCP、Plugins 与 Rules"
-  default_prompt: "使用 AgentHub 检查、规划并安全同步全局 Agent 能力。"
+  default_prompt: "使用 AgentHub 检查全局能力库、迁移备份流或处理版本冲突，先验证内容和同步范围。"

@@ -86,5 +86,5 @@ jobs:
           pnpm build
           cargo fmt --all -- --check
           cargo clippy -p agenthub-core -p agenthub-cli --all-targets -- -D warnings
-          cargo test -p agenthub-core
+          cargo test -p agenthub-core -p agenthub-cli
           cargo check -p agenthub-desktop

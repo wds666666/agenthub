@@ -32,7 +32,7 @@ pnpm lint
 if ($LASTEXITCODE -ne 0) { throw "frontend lint failed" }
 pnpm test
 if ($LASTEXITCODE -ne 0) { throw "frontend tests failed" }
-cargo test -p agenthub-core
+cargo test -p agenthub-core -p agenthub-cli
 if ($LASTEXITCODE -ne 0) { throw "Rust tests failed" }
 
 cargo build --release -p agenthub-cli
@@ -69,11 +69,25 @@ if ((Get-PESubsystem $builtCliBinary) -ne 3) {
     throw "CLI executable is not a Windows console subsystem binary"
 }
 
+$version = (Get-Content (Join-Path $repoRoot "package.json") -Raw | ConvertFrom-Json).version
+$portableDirectory = Join-Path $repoRoot "target/release/portable/AgentHub"
+if (Test-Path $portableDirectory) { Remove-Item $portableDirectory -Recurse -Force }
+New-Item -ItemType Directory -Force -Path $portableDirectory | Out-Null
+Copy-Item $desktopBinary (Join-Path $portableDirectory "AgentHub.exe")
+Copy-Item $builtCliBinary (Join-Path $portableDirectory "agenthub.exe")
+Copy-Item "skills/agenthub-manager/scripts/agenthub.ps1" $portableDirectory
+New-Item -ItemType Directory -Path (Join-Path $portableDirectory "skills") | Out-Null
+Copy-Item "skills/agenthub-manager" (Join-Path $portableDirectory "skills") -Recurse
+Copy-Item "docs/portable-windows.md" (Join-Path $portableDirectory "README.md")
+Copy-Item "LICENSE" $portableDirectory
+$portableArchive = Join-Path $repoRoot "target/release/bundle/AgentHub_${version}_windows-x64-portable.zip"
+Compress-Archive -Path $portableDirectory -DestinationPath $portableArchive -Force
+
 $artifacts = @(
     Get-ChildItem "target/release/bundle/nsis/*-setup.exe" -ErrorAction SilentlyContinue
     Get-ChildItem "target/release/bundle/msi/*.msi" -ErrorAction SilentlyContinue
     Get-Item $builtCliBinary
-    Get-Item $desktopBinary
+    Get-Item $portableArchive
 )
 
 $checksumPath = Join-Path $repoRoot "target/release/bundle/SHA256SUMS.windows.txt"

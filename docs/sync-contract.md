@@ -24,6 +24,8 @@ Each list domain also carries an explicit managed flag. This separates "do not t
 
 The automatic-sync profile uses the same visible selector. The UI shows the saved target scope and requires the user to review named Skills, Plugins, MCP servers and the Rules toggle when enabling or changing it; automatic sync is never represented as an opaque all-capabilities switch.
 
+CLI `plan <target> --selection <json-file> --json` accepts the same selection, rejects unknown fields and missing/duplicate resource IDs, and persists it in the Plan. Omitting `--selection` retains full compatible scope. CLI initialization cannot overwrite an initialized library; whole-scan first import uses atomic staging and skips nonimportable discoveries.
+
 ## Target domains
 
 | Target | Skills | MCP | Plugins | Rules |

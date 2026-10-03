@@ -28,6 +28,8 @@ Bulk library deletion first validates every `(kind, id)`, then renames directori
 
 Every JSON manifest contains `schemaVersion: 1`.
 
+Current MCP JSON uses `display_name` and string-valued `env`/`headers`; Rule and Plugin metadata use `displayName`. The richer IR below describes the intended model; current MCP serialization does not implement a general OAuth/SecretRef resolver. Actual file examples and implemented limits are maintained in the [manager format reference](../skills/agenthub-manager/references/formats.md). `agenthub validate --json` checks structure, schemas, directory/manifest identities and disallowed file types; it does not evaluate instruction semantics or scan every possible secret.
+
 - `Capability`: `id`, `kind`, `displayName`, `digest`, compatibility metadata and timestamps.
 - `McpServer`: `transport` (`stdio`, `http`, `sse`), command/args or URL, headers/env/OAuth, and `SecretRef` values.
 - `Rule`: Markdown body in `rule.md` plus `schemaVersion`, immutable lowercase slug `id`, `displayName`, `activation`, `paths`, and target compatibility in `rule.json`. Desktop Markdown import initializes this structure as a draft before the user saves it.

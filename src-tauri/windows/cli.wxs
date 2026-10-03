@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Fragment>
+    <DirectoryRef Id="INSTALLDIR">
+      <Component Id="AgentHubUserCommand" Guid="07ba154c-5633-4b67-b549-2f8c5abac7f7" Win64="yes">
+        <Environment Id="AgentHubUserPath" Name="PATH" Value="[INSTALLDIR]"
+                     Action="set" Part="last" System="no" Permanent="no" />
+        <RegistryValue Root="HKCU" Key="Software\AgentHub\MSI" Name="CliPath"
+                       Type="string" Value="[INSTALLDIR]agenthub.exe" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+    <ComponentGroup Id="AgentHubCommandIntegration">
+      <ComponentRef Id="AgentHubUserCommand" />
+    </ComponentGroup>
+  </Fragment>
+</Wix>

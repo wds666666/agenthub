@@ -1,9 +1,12 @@
 use agenthub_core::{
-    canonical, git, models::Target, planner, scanner, secrets, transaction, AgentHub,
+    canonical, git,
+    models::{CapabilityKind, SyncSelection, Target},
+    planner, scanner, secrets, transaction, AgentHub,
 };
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::io::{self, Read};
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(
@@ -39,6 +42,9 @@ enum Command {
     },
     Plan {
         target: TargetArg,
+        /// JSON SyncSelection; omitted means all compatible capabilities.
+        #[arg(long)]
+        selection: Option<PathBuf>,
         #[arg(long)]
         json: bool,
     },
@@ -69,6 +75,11 @@ enum Command {
         command: SecretCommand,
     },
     Doctor {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Validate portable content without writing to any host.
+    Validate {
         #[arg(long)]
         json: bool,
     },
@@ -129,22 +140,27 @@ fn main() -> Result<()> {
     match cli.command {
         Command::Init { import_all, empty } => {
             anyhow::ensure!(
+                !hub.store.initialized()?,
+                "library already initialized; use Scan and import in the desktop for new content"
+            );
+            anyhow::ensure!(
                 !(import_all && empty),
                 "choose either --import-all or --empty"
             );
             git::ensure_repo(&hub.paths.root)?;
-            let mut found = scanner::scan_global(&hub.paths, &Target::ALL)?;
-            if import_all {
-                for i in &mut found {
-                    i.selected = true;
-                }
-                let imported = canonical::import_scan_items(&hub.paths, &found)?;
-                hub.store.set_initialized(true)?;
-                println!("imported {} capabilities", imported.len());
-            } else if empty {
+            if empty {
                 hub.store.set_initialized(true)?;
                 println!("initialized an empty Canonical source");
+            } else if import_all {
+                let mut found = scanner::scan_global(&hub.paths, &Target::ALL)?;
+                for i in &mut found {
+                    i.selected = i.importable;
+                }
+                let imported = canonical::import_initial_atomic(&hub.paths, &found)?;
+                hub.store.set_initialized(true)?;
+                println!("imported {} capabilities", imported.len());
             } else {
+                let found = scanner::scan_global(&hub.paths, &Target::ALL)?;
                 println!("{}", serde_json::to_string_pretty(&found)?);
                 eprintln!("Review the discovery result, then use the desktop selection flow, --import-all, or --empty. Initialization is not complete.");
             }
@@ -186,8 +202,38 @@ fn main() -> Result<()> {
             TargetCommand::Enable { target } => hub.store.set_target(target.0, true)?,
             TargetCommand::Disable { target } => hub.store.set_target(target.0, false)?,
         },
-        Command::Plan { target, json: _ } => {
-            let p = planner::create(&hub.paths, target.0)?;
+        Command::Plan {
+            target,
+            selection,
+            json: _,
+        } => {
+            let scope = selection.map(read_selection).transpose()?;
+            if let Some(scope) = &scope {
+                let inventory = canonical::inventory(&hub.paths)?;
+                for (kind, ids) in [
+                    (CapabilityKind::Skill, &scope.skills),
+                    (CapabilityKind::Mcp, &scope.mcp),
+                    (CapabilityKind::Plugin, &scope.plugins),
+                ] {
+                    let mut seen = std::collections::BTreeSet::new();
+                    for id in ids {
+                        anyhow::ensure!(
+                            seen.insert(id)
+                                && inventory.iter().any(|c| c.kind == kind && c.id == *id),
+                            "unknown or duplicate {} selection: {id}",
+                            kind.as_str()
+                        );
+                    }
+                }
+                anyhow::ensure!(
+                    target.0 != Target::Agents
+                        || !(scope.manages_mcp()
+                            || scope.manages_plugins()
+                            || scope.manages_rules()),
+                    "shared Agents supports only Skills"
+                );
+            }
+            let p = planner::create_with_selection(&hub.paths, target.0, scope.as_ref())?;
             hub.store.save_plan(&p)?;
             println!("{}", serde_json::to_string_pretty(&p)?);
         }
@@ -279,8 +325,43 @@ fn main() -> Result<()> {
                 );
             }
         }
+        Command::Validate { json } => {
+            let inventory = canonical::validate(&hub.paths)?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({"valid": true, "capabilities": inventory.len()})
+                );
+            } else {
+                println!("Validated {} capabilities", inventory.len());
+            }
+        }
     }
     Ok(())
+}
+fn read_selection(path: PathBuf) -> Result<SyncSelection> {
+    let value: serde_json::Value = serde_json::from_slice(&std::fs::read(path)?)?;
+    let object = value
+        .as_object()
+        .context("selection must be a JSON object")?;
+    for key in object.keys() {
+        anyhow::ensure!(
+            [
+                "skills_managed",
+                "skills",
+                "plugins_managed",
+                "plugins",
+                "mcp_managed",
+                "mcp",
+                "rules_managed",
+                "rules",
+                "authoritative"
+            ]
+            .contains(&key.as_str()),
+            "unknown selection field: {key}"
+        );
+    }
+    Ok(serde_json::from_value(value)?)
 }
 fn parse_targets(value: &str) -> Result<Vec<Target>> {
     if value == "all" {

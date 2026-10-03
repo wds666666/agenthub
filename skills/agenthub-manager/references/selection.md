@@ -12,6 +12,20 @@ The Desktop Target Sync page starts with an explicit scope selector:
 
 Selected Skills/Plugins/MCP are projected into the target writable domain. Host extras in an included domain are shown as deletions and are covered by the transaction backup. A domain with no selected resources is not touched. Rules disabled means the target Rules domain is not touched.
 
+For CLI, create a JSON file outside Canonical (or in its ignored `runtime/` directory), then use `agenthub plan cursor --selection <file> --json`:
+
+```json
+{
+  "skills_managed": true,
+  "skills": ["review", "writing"],
+  "mcp": ["example"],
+  "plugins": [],
+  "rules": false
+}
+```
+
+This manages the chosen Skills/MCP domains; their host extras may be deleted. Omitted/false managed flags with empty lists leave that domain untouched. A true managed flag with an empty list explicitly clears that domain. `rules: true` includes all compatible library Rules; `rules_managed: true` with `rules: false` clears writable Rules. `authoritative: true` includes every writable domain, including empty ones; do not enable it as a shortcut. Unknown fields fail, and invalid IDs are rejected by the planner. Without `--selection`, CLI Plan covers all compatible resources. `agents` is a valid target but only supports Skills.
+
 Automatic sync is triggered by AgentHub mutation commands rather than a background watcher. A direct Canonical filesystem edit by an external agent must be followed by `agenthub auto-sync run`; this runs only profiles the user already enabled. A no-op run creates no Plan, backup, or transaction, while every real host write retains a separately rollback-capable transaction.
 
 ## Review checklist
