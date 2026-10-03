@@ -71,6 +71,7 @@ try {
     Assert ((Count-Entry $first) -eq 1 -and (User-Path).StartsWith($baseline)) "PATH duplication or truncation"
     Assert ($environmentKey.GetValueKind("Path") -eq [Microsoft.Win32.RegistryValueKind]::ExpandString) "PATH representation changed"
     Check-StaleEnvironment (Join-Path $first "agenthub.exe")
+    Write-Host "Registry ownership, long PATH and Skill discovery passed."
     & ./scripts/windows-cli.ps1 -Action Install -InstallDirectory $second
     & ./scripts/windows-cli.ps1 -Action Uninstall -InstallDirectory $first
     Assert ((Count-Entry $first) -eq 0 -and (Count-Entry $second) -eq 1) "Relocated upgrade was unregistered by an old uninstaller"
@@ -96,16 +97,25 @@ try {
     Invoke-Package (Join-Path $installed "uninstall.exe") @("/S", "_?=$installed")
     Assert ((Count-Entry $installed) -eq 0 -and (User-Path) -ceq $baseline) "NSIS uninstall did not restore PATH"
     Assert (-not (Test-Path (Join-Path $installed "agenthub.exe"))) "NSIS uninstall left CLI installed"
+    Write-Host "NSIS install, upgrade and uninstall passed."
 
     $msi = (Get-ChildItem target/release/bundle/msi/*.msi | Select-Object -First 1).FullName
     $msiDirectory = Join-Path $testRoot "MSI AgentHub"
     $msiexec = Join-Path $env:SystemRoot "System32/msiexec.exe"
-    Invoke-Package $msiexec @("/i", "`"$msi`"", "/qn", "/norestart", "INSTALLDIR=`"$msiDirectory`"")
-    Assert ((Count-Entry $msiDirectory) -eq 1) "MSI did not register the user command PATH"
-    Check-Version (Join-Path $msiDirectory "agenthub.exe")
-    Check-StaleEnvironment (Join-Path $msiDirectory "agenthub.exe")
-    Invoke-Package $msiexec @("/x", "`"$msi`"", "/qn", "/norestart")
+    $msiInstallLog = Join-Path $env:RUNNER_TEMP "agenthub-msi-install.log"
+    Invoke-Package $msiexec @("/i", "`"$msi`"", "/qn", "/norestart", "/L*v", "`"$msiInstallLog`"", "INSTALLDIR=`"$msiDirectory`"")
+    # Tauri's MSI AppSearch may reuse the directory saved by a previous NSIS install.
+    # Verify the actual registered companion, not the requested default directory.
+    $msiCli = (Get-ItemProperty -LiteralPath "HKCU:\Software\AgentHub\MSI" -Name CliPath).CliPath
+    $msiDirectory = Split-Path -Parent $msiCli
+    Write-Host "MSI registered command: $msiCli; user PATH length: $((User-Path).Length)"
+    Assert ((Count-Entry $msiDirectory) -eq 1) "MSI did not register its actual installation directory in user PATH"
+    Check-Version $msiCli
+    Check-StaleEnvironment $msiCli
+    Assert (Test-Path (Join-Path $msiDirectory "skills/agenthub-manager/SKILL.md")) "MSI omitted the management Skill"
+    Invoke-Package $msiexec @("/x", "`"$msi`"", "/qn", "/norestart", "/L*v", "`"$(Join-Path $env:RUNNER_TEMP 'agenthub-msi-uninstall.log')`"")
     Assert ((Count-Entry $msiDirectory) -eq 0 -and (User-Path) -ceq $baseline) "MSI uninstall changed unrelated PATH"
+    Write-Host "MSI install, command discovery and uninstall passed."
 
     $archive = (Get-ChildItem target/release/bundle/*windows-x64-portable.zip | Select-Object -First 1).FullName
     $portableRoot = Join-Path $testRoot "portable"

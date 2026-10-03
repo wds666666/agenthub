@@ -192,6 +192,15 @@ jobs:
         shell: pwsh
         run: ./scripts/test-windows-packages.ps1
 
+      - name: Keep installer failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-installer-diagnostics
+          if-no-files-found: ignore
+          retention-days: 14
+          path: ${{ runner.temp }}/agenthub-msi-*.log
+
       - name: Collect Windows artifacts
         shell: pwsh
         run: |
