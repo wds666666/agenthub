@@ -39,6 +39,12 @@ function Check-StaleEnvironment([string]$Expected) {
     $env:AGENTHUB_CLI = $null
     $resolved = & $powershell -NoProfile -ExecutionPolicy Bypass -File $resolver --resolve
     Assert ($LASTEXITCODE -eq 0 -and $resolved -ieq $Expected) "Skill failed with an old process PATH"
+    $shadowDirectory = Join-Path $testRoot "old-command"
+    New-Item -ItemType Directory -Force -Path $shadowDirectory | Out-Null
+    Set-Content -Path (Join-Path $shadowDirectory "agenthub.exe") -Value "discovery-only fixture"
+    $env:PATH = "$shadowDirectory;$env:PATH"
+    $resolved = & $powershell -NoProfile -ExecutionPolicy Bypass -File $resolver --resolve
+    Assert ($LASTEXITCODE -eq 0 -and $resolved -ieq $Expected) "An old standalone PATH command shadowed the installed CLI"
     $output = & $powershell -NoProfile -ExecutionPolicy Bypass -File $resolver --version
     Assert ($LASTEXITCODE -eq 0 -and $output -eq "agenthub $version") "Skill argument forwarding failed"
     & $powershell -NoProfile -ExecutionPolicy Bypass -File $resolver invalid-command 2>$null | Out-Null
@@ -105,9 +111,11 @@ try {
     $portableRoot = Join-Path $testRoot "portable"
     Expand-Archive -Path $archive -DestinationPath $portableRoot -Force
     $portable = Join-Path $portableRoot "AgentHub"
-    foreach ($relative in @("AgentHub.exe", "agenthub.exe", "agenthub.ps1", "README.md", "skills/agenthub-manager/SKILL.md")) {
+    foreach ($relative in @("agenthub-desktop.exe", "agenthub.exe", "agenthub.ps1", "README.md", "skills/agenthub-manager/SKILL.md")) {
         Assert (Test-Path (Join-Path $portable $relative)) "Portable ZIP omitted $relative"
     }
+    Assert ((Get-FileHash (Join-Path $portable "agenthub-desktop.exe")).Hash -eq (Get-FileHash target/release/agenthub-desktop.exe).Hash) "Portable desktop differs from the GUI build"
+    Assert ((Get-FileHash (Join-Path $portable "agenthub.exe")).Hash -eq (Get-FileHash target/release/agenthub.exe).Hash) "Portable CLI differs from the CLI build"
     $env:PATH = Join-Path $env:SystemRoot "System32"
     $output = & $powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $portable "agenthub.ps1") --version
     Assert ($LASTEXITCODE -eq 0 -and $output -eq "agenthub $version") "Portable CLI requires a separate install"

@@ -9,8 +9,7 @@ if ($env:AGENTHUB_CLI) {
     $candidates = @($env:AGENTHUB_CLI)
 } else {
     $candidates += Join-Path $PSScriptRoot "agenthub.exe"
-    $command = Get-Command agenthub.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($command) { $candidates += $command.Source }
+    # Prefer the installed companion CLI over an older standalone command on PATH.
     foreach ($key in @("HKCU:\Software\AgentHub\CLI", "HKCU:\Software\AgentHub\MSI")) {
         $value = Get-ItemProperty -LiteralPath $key -Name CliPath -ErrorAction SilentlyContinue
         if ($value) { $candidates += $value.CliPath }
@@ -23,6 +22,8 @@ if ($env:AGENTHUB_CLI) {
             }
         }
     }
+    $command = Get-Command agenthub.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($command) { $candidates += $command.Source }
     if ($env:LOCALAPPDATA) { $candidates += Join-Path $env:LOCALAPPDATA "AgentHub\agenthub.exe" }
     if ($env:ProgramFiles) { $candidates += Join-Path $env:ProgramFiles "AgentHub\agenthub.exe" }
 }

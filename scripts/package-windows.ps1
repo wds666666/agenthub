@@ -73,8 +73,12 @@ $version = (Get-Content (Join-Path $repoRoot "package.json") -Raw | ConvertFrom-
 $portableDirectory = Join-Path $repoRoot "target/release/portable/AgentHub"
 if (Test-Path $portableDirectory) { Remove-Item $portableDirectory -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $portableDirectory | Out-Null
-Copy-Item $desktopBinary (Join-Path $portableDirectory "AgentHub.exe")
+Copy-Item $desktopBinary (Join-Path $portableDirectory "agenthub-desktop.exe")
 Copy-Item $builtCliBinary (Join-Path $portableDirectory "agenthub.exe")
+if ((Get-PESubsystem (Join-Path $portableDirectory "agenthub-desktop.exe")) -ne 2 -or
+    (Get-PESubsystem (Join-Path $portableDirectory "agenthub.exe")) -ne 3) {
+    throw "Portable desktop and CLI must remain separate executables with the correct subsystem"
+}
 Copy-Item "skills/agenthub-manager/scripts/agenthub.ps1" $portableDirectory
 New-Item -ItemType Directory -Path (Join-Path $portableDirectory "skills") | Out-Null
 Copy-Item "skills/agenthub-manager" (Join-Path $portableDirectory "skills") -Recurse

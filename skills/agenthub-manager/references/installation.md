@@ -11,9 +11,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "<skill-directory>\scrip
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "<skill-directory>\scripts\agenthub.ps1" doctor --json
 ```
 
-`--resolve` returns only the absolute executable path. Invoke that executable with PowerShell's `&` operator and an argument array, or forward further commands through the wrapper. It checks an explicit `AGENTHUB_CLI` override first, then a neighboring portable executable, PATH, installer registry entries and fixed installation locations. Invalid explicit overrides fail rather than silently selecting another installation. Do not scan arbitrary disks or invoke a shell command assembled from user strings.
+`--resolve` returns only the absolute executable path. Invoke that executable with PowerShell's `&` operator and an argument array, or forward further commands through the wrapper. It checks an explicit `AGENTHUB_CLI` override first, then a neighboring portable executable, installer registry entries, PATH and fixed installation locations. The installed companion CLI takes precedence over an older standalone command on PATH. Invalid explicit overrides fail rather than silently selecting another installation. Do not scan arbitrary disks or invoke a shell command assembled from user strings.
 
-The portable ZIP contains `AgentHub.exe`, `agenthub.exe`, a neighboring `agenthub.ps1` and the skill. Extract the whole directory. Use the executable's absolute path or set `AGENTHUB_CLI` in the agent process; portable extraction does not modify PATH. The data root remains `%USERPROFILE%\.agenthub`, independent of the program folder. Independent CLI downloads are optional for users who do not want the UI.
+The portable ZIP contains `agenthub-desktop.exe`, `agenthub.exe`, a neighboring `agenthub.ps1` and the skill. Extract the whole directory. Use the executable's absolute path or set `AGENTHUB_CLI` in the agent process; portable extraction does not modify PATH. The data root remains `%USERPROFILE%\.agenthub`, independent of the program folder. Independent CLI downloads are optional for users who do not want the UI.
 
 ## Ubuntu
 

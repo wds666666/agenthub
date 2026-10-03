@@ -440,8 +440,11 @@ pub fn sync_remote(root: &Path) -> Result<()> {
         "save a local version before remote sync"
     );
     check_upload_history(root)?;
+    let paths = crate::paths::AgentHubPaths::new(root.to_path_buf(), root.to_path_buf());
+    crate::canonical::validate(&paths)?;
     let destination = format!("HEAD:refs/heads/{}", settings.branch);
     reconcile(root, &url, &settings.branch)?;
+    crate::canonical::validate(&paths)?;
     check_upload_history(root)?;
     if let Err(first) = run(root, &["push", &url, &destination]) {
         // Only retry a remote race; authentication and network failures remain actionable.
@@ -601,6 +604,27 @@ mod tests {
         assert!(!result.remote_synced);
         assert!(result.remote_error.is_some());
         assert!(!snapshot(&hub.paths.root).unwrap().dirty);
+    }
+    #[test]
+    fn invalid_content_is_blocked_before_any_remote_network_access() {
+        let temp = TempDir::new().unwrap();
+        let hub = device(temp.path());
+        skill(&hub, "broken", "");
+        fs::write(hub.paths.skills.join("broken/SKILL.md"), "").unwrap();
+        run(&hub.paths.root, &["add", "skills/broken/SKILL.md"]).unwrap();
+        run(
+            &hub.paths.root,
+            &["commit", "-m", "Unchecked external edit"],
+        )
+        .unwrap();
+        local_remote(
+            &hub.paths.root,
+            Path::new("https://example.invalid/library.git"),
+        );
+        assert!(sync_remote(&hub.paths.root)
+            .unwrap_err()
+            .to_string()
+            .contains("skill broken"));
     }
     #[test]
     fn remote_validation_rejects_credentials_options_and_local_paths() {

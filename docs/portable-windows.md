@@ -1,6 +1,6 @@
 # AgentHub Windows 便携版
 
-完整解压 `AgentHub/` 目录后，双击 `AgentHub.exe` 打开界面。目录内的 `agenthub.exe` 是同版本 CLI，无需再次安装。使用前准备系统 Git 和 WebView2。
+完整解压 `AgentHub/` 目录后，双击 `agenthub-desktop.exe` 打开界面。目录内的 `agenthub.exe` 是同版本 CLI，无需再次安装。使用前准备系统 Git 和 WebView2。
 
 PowerShell 中可以直接使用：
 
