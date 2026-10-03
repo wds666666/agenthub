@@ -606,8 +606,8 @@ code, pre { font-family: var(--mono); font-variant-ligatures: none; }
 .spin { animation: spin 700ms linear infinite; }
 @keyframes spin { to { transform: rotate(1turn); } }
 
-.init-shell { display: grid; place-items: center; min-height: 100vh; padding: clamp(16px, 4vw, 52px); }
-.init-panel { width: min(100%, 930px); max-height: calc(100vh - 40px); padding: clamp(22px, 4vw, 42px); overflow: auto; background: var(--material); border: 1px solid rgba(255, 255, 255, 0.36); border-radius: 30px; box-shadow: var(--shadow-float); backdrop-filter: blur(32px) saturate(1.25); -webkit-backdrop-filter: blur(32px) saturate(1.25); animation: materialize 480ms var(--ease-out) both; }
+.init-shell { --init-inset: clamp(16px, 4vw, 52px); display: grid; place-items: center; min-height: 100dvh; padding: var(--init-inset); }
+.init-panel { width: min(100%, 930px); max-height: calc(100dvh - 2 * var(--init-inset)); padding: clamp(22px, 4vw, 42px); overflow: auto; background: var(--material); border: 1px solid rgba(255, 255, 255, 0.36); border-radius: 30px; box-shadow: var(--shadow-float); backdrop-filter: blur(32px) saturate(1.25); -webkit-backdrop-filter: blur(32px) saturate(1.25); animation: materialize 480ms var(--ease-out) both; }
 .init-topbar { display: flex; align-items: center; gap: 11px; padding-bottom: 22px; border-bottom: 1px solid var(--line); }
 .init-topbar > span:nth-child(2) { display: flex; flex: 1; flex-direction: column; }
 .init-topbar strong { font-size: 14px; }
@@ -663,15 +663,14 @@ code, pre { font-family: var(--mono); font-variant-ligatures: none; }
 .policy-guards { display: flex; flex-wrap: wrap; gap: 9px 18px; margin-top: 13px; color: var(--ink-secondary); font-size: 9px; }
 .policy-guards span { display: inline-flex; align-items: center; gap: 6px; }
 .policy-guards svg { color: var(--green); }
-.scan-list label { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; gap: 10px; min-height: 60px; padding: 8px 11px; border: 1px solid transparent; border-radius: 11px; cursor: pointer; transition: transform 90ms var(--ease-press), background 150ms ease, border-color 150ms ease; }
+.scan-list label { position: relative; display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; gap: 10px; min-height: 60px; padding: 8px 11px; border: 1px solid transparent; border-radius: 11px; cursor: pointer; transition: background 150ms ease, border-color 150ms ease; }
 .scan-list label:hover { background: var(--material-inset); }
-.scan-list label:active { transform: scale(0.992); }
 .scan-list label.is-selected { background: var(--blue-soft); border-color: color-mix(in srgb, var(--blue) 20%, transparent); }
 .scan-list label.is-disabled { cursor: not-allowed; opacity: 0.72; }
 .scan-list label.is-disabled:hover { background: transparent; }
-.scan-list label.is-disabled:active { transform: none; }
 .scan-list label.is-disabled .scan-check { color: var(--amber); background: var(--amber-soft); border-color: transparent; }
-.scan-list input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.scan-list input { position: absolute; left: 11px; top: 50%; width: 22px; height: 22px; margin: 0; opacity: 0; transform: translateY(-50%); cursor: inherit; }
+.scan-list input:focus-visible + .scan-check { box-shadow: var(--focus); }
 .scan-check { display: grid; place-items: center; width: 22px; height: 22px; color: transparent; border: 1.5px solid var(--line-strong); border-radius: 7px; }
 .is-selected .scan-check { color: white; background: var(--blue); border-color: var(--blue); box-shadow: 0 3px 10px rgba(8, 127, 245, 0.2); }
 .scan-copy { display: flex; min-width: 0; flex-direction: column; }
@@ -767,12 +766,11 @@ code, pre { font-family: var(--mono); font-variant-ligatures: none; }
   .history-batch > summary { align-items: flex-start; padding-block: 13px; flex-direction: column; }
   .security-note { grid-template-columns: 42px 1fr; }
   .security-note .status { grid-column: 1 / -1; }
-  .init-shell { padding: 10px; }
-  .init-panel { max-height: calc(100vh - 20px); padding: 20px 16px; border-radius: 22px; }
+  .init-shell { --init-inset: 10px; }
+  .init-panel { padding: 20px 16px; border-radius: 22px; }
   .scan-toolbar { align-items: flex-start; flex-direction: column; }
   .scan-kind-tabs { grid-template-columns: 1fr 1fr; }
   .scan-list label { grid-template-columns: 22px 1fr auto; }
-  .scan-list label > input { display: none; }
   .scan-list label > code { display: none; }
   .dialog-backdrop { padding: 12px; }
   .dialog--wide { max-height: calc(100vh - 24px); border-radius: 19px; }

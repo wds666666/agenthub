@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type WheelEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type FormEvent, type SetStateAction, type WheelEvent } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -308,6 +308,7 @@ function Inventory({ onChanged, onNotify }: { onChanged: () => void; onNotify: (
   const [scanKind, setScanKind] = useState<Kind>("skill");
   const [scanSource, setScanSource] = useState("all");
   const [scanBusy, setScanBusy] = useState(false);
+  const scanPending = useRef(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const loadInventory = useCallback(() => { api.inventory().then(setItems).catch(() => setItems([])); }, []);
   useEffect(loadInventory, [loadInventory]);
@@ -383,12 +384,16 @@ function Inventory({ onChanged, onNotify }: { onChanged: () => void; onNotify: (
     finally { setDeleting(false); }
   };
   const scanForImport = async () => {
+    if (scanPending.current) return;
+    scanPending.current = true;
     setScanBusy(true); setLoadError("");
     try { setScanItems(await api.scan()); setScanSelected(new Set()); setScanSource("all"); }
     catch (value) { setLoadError(String(value)); }
-    finally { setScanBusy(false); }
+    finally { scanPending.current = false; setScanBusy(false); }
   };
   const importScanned = async () => {
+    if (scanPending.current) return;
+    scanPending.current = true;
     setScanBusy(true); setLoadError("");
     try {
       const result = await api.importScanned([...scanSelected]);
@@ -396,7 +401,7 @@ function Inventory({ onChanged, onNotify }: { onChanged: () => void; onNotify: (
       const autoFailures = result.auto_sync.filter((outcome) => outcome.error).length;
       onNotify(`${result.imported.length} ${t("inventory.scanImported")} · ${result.skipped_duplicates} ${t("inventory.scanSkipped")}${autoFailures ? ` · ${autoFailures} ${t("inventory.scanAutoFailed")}` : ""}`);
     } catch (value) { setLoadError(String(value)); }
-    finally { setScanBusy(false); }
+    finally { scanPending.current = false; setScanBusy(false); }
   };
   const canonicalDigests = useMemo(() => new Set(items.map((item) => `${item.kind}:${item.digest}`)), [items]);
   const visibleScanItems = (scanItems ?? []).filter((item) => item.kind === scanKind && (scanSource === "all" || item.source === scanSource));
@@ -479,7 +484,7 @@ function Inventory({ onChanged, onNotify }: { onChanged: () => void; onNotify: (
         <p>{t("inventory.scanImportBody")}</p>
         <ImportSourcePicker items={scanItems ?? []} available={scanImportableItems} selected={scanSelected} source={scanSource} onSource={setScanSource} onSelected={setScanSelected} busy={scanBusy} />
         <div className="scan-kind-tabs" role="tablist" aria-label={t("init.groups")}>
-          {kindMeta.map(({ id, icon: KindIcon }) => { const group = (scanItems ?? []).filter((item) => item.kind === id && (scanSource === "all" || item.source === scanSource)); return <button type="button" role="tab" aria-selected={scanKind === id} className={scanKind === id ? "is-selected" : ""} onClick={() => setScanKind(id)} key={id}><KindIcon size={17} /><span><strong>{t(`kinds.${id}`)}</strong><small>{group.filter((item) => scanSelected.has(item.id)).length} / {group.length}</small></span></button>; })}
+          {kindMeta.map(({ id, icon: KindIcon }) => { const group = (scanItems ?? []).filter((item) => item.kind === id && (scanSource === "all" || item.source === scanSource)); return <button type="button" role="tab" aria-selected={scanKind === id} className={scanKind === id ? "is-selected" : ""} disabled={scanBusy} onClick={() => setScanKind(id)} key={id}><KindIcon size={17} /><span><strong>{t(`kinds.${id}`)}</strong><small>{group.filter((item) => scanSelected.has(item.id)).length} / {group.length}</small></span></button>; })}
         </div>
         <div className="scan-group-toolbar"><span>{visibleScanItems.length} {t("init.discovered")}</span><Button variant="quiet" disabled={scanBusy || !scanImportableItems.some((item) => item.kind === scanKind && (scanSource === "all" || item.source === scanSource))} onClick={() => setScanSelected((current) => { const next = new Set(current); const available = scanImportableItems.filter((item) => item.kind === scanKind && (scanSource === "all" || item.source === scanSource)); const allSelected = available.every((item) => next.has(item.id)); available.forEach((item) => allSelected ? next.delete(item.id) : next.add(item.id)); return next; })}>{t("init.selectGroup")}</Button></div>
         <div className="scan-list scan-list--dialog">
@@ -1140,7 +1145,7 @@ function EmptyState({ icon: EmptyIcon, title, body, compact = false }: { icon: I
   );
 }
 
-function ImportSourcePicker({ items, available, selected, source, onSource, onSelected, busy }: { items: ScanItem[]; available: ScanItem[]; selected: Set<string>; source: string; onSource: (source: string) => void; onSelected: (selected: Set<string>) => void; busy: boolean }) {
+function ImportSourcePicker({ items, available, selected, source, onSource, onSelected, busy }: { items: ScanItem[]; available: ScanItem[]; selected: Set<string>; source: string; onSource: (source: string) => void; onSelected: Dispatch<SetStateAction<Set<string>>>; busy: boolean }) {
   const sources = ["agents", "cursor", "codex", "claude", ...new Set(items.map((item) => item.source).filter((id) => !["agents", "cursor", "codex", "claude"].includes(id)))];
   const chosen = items.filter((item) => selected.has(item.id));
   const unique = new Set(chosen.map((item) => `${item.kind}:${item.digest}`)).size;
@@ -1150,7 +1155,7 @@ function ImportSourcePicker({ items, available, selected, source, onSource, onSe
       {["all", ...sources].map((id) => { const group = available.filter((item) => id === "all" || item.source === id); return <button type="button" aria-label={`${id === "all" ? t("init.allSources") : targetMeta.some((target) => target.id === id) ? t(`targets.${id}`) : id} ${group.filter((item) => selected.has(item.id)).length} / ${group.length}`} aria-pressed={source === id} className={source === id ? "is-selected" : ""} disabled={busy} key={id} onClick={() => onSource(id)}><span><strong>{id === "all" ? t("init.allSources") : targetMeta.some((target) => target.id === id) ? t(`targets.${id}`) : id}</strong><small>{group.filter((item) => selected.has(item.id)).length} / {group.length}</small></span></button>; })}
     </div>
     <p className="import-source-hint">{t("init.scannedCount")} <strong>{items.filter((item) => source === "all" || item.source === source).length}</strong> · {t("init.newCount")} <strong>{current.length}</strong>{items.every((item) => source !== "all" && item.source !== source) && <span> · {t("init.emptySource")}</span>}</p>
-    <div className="scan-group-toolbar"><p role="status">{t("init.totalSelected")} <strong>{selected.size}</strong> · {t("init.uniqueSelected")} <strong>{unique}</strong><small>{t("init.selectionHint")}</small></p><Button variant="quiet" disabled={busy || !current.length} onClick={() => { const next = new Set(selected); const allSelected = current.every((item) => next.has(item.id)); current.forEach((item) => allSelected ? next.delete(item.id) : next.add(item.id)); onSelected(next); }}>{current.length && current.every((item) => selected.has(item.id)) ? t("init.clearSource") : t("init.selectSource")}</Button></div>
+    <div className="scan-group-toolbar"><p role="status">{t("init.totalSelected")} <strong>{selected.size}</strong> · {t("init.uniqueSelected")} <strong>{unique}</strong><small>{t("init.selectionHint")}</small></p><Button variant="quiet" disabled={busy || !current.length} onClick={() => { onSelected((previous) => { const next = new Set(previous); const allSelected = current.every((item) => next.has(item.id)); current.forEach((item) => allSelected ? next.delete(item.id) : next.add(item.id)); return next; }); }}>{current.length && current.every((item) => selected.has(item.id)) ? t("init.clearSource") : t("init.selectSource")}</Button></div>
   </section>;
 }
 
@@ -1158,6 +1163,7 @@ function Init({ onDone, recoveryPath }: { onDone: (count: number) => void; recov
   const [items, setItems] = useState<ScanItem[] | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
+  const pending = useRef(false);
   const [error, setError] = useState("");
   const [recover, setRecover] = useState(false);
   const [scanKind, setScanKind] = useState<Kind>("skill");
@@ -1168,18 +1174,25 @@ function Init({ onDone, recoveryPath }: { onDone: (count: number) => void; recov
   const visibleSelectedCount = visibleImportableItems.filter((item) => selected.has(item.id)).length;
 
   const scan = async () => {
+    if (pending.current) return;
+    pending.current = true;
     setBusy(true); setError("");
-    try { setItems(await api.scan()); setSelected(new Set()); setScanSource("all"); } catch (value) { setError(String(value)); } finally { setBusy(false); }
+    try { setItems(await api.scan()); setSelected(new Set()); setScanSource("all"); } catch (value) { setError(String(value)); } finally { pending.current = false; setBusy(false); }
   };
   const finish = async () => {
+    if (pending.current) return;
+    pending.current = true;
     setBusy(true); setError("");
     try { const imported = await api.finishInit([...selected]); onDone(imported.length); } catch (value) {
       const message = String(value); setError(message); if (message.includes("incomplete Canonical")) setRecover(true);
-    } finally { setBusy(false); }
+    } finally { pending.current = false; setBusy(false); }
   };
   const discard = async () => {
-    setBusy(true);
-    try { await api.discardIncompleteInit(); setRecover(false); await scan(); } catch (value) { setError(String(value)); setBusy(false); }
+    if (pending.current) return;
+    pending.current = true;
+    setBusy(true); setError("");
+    try { await api.discardIncompleteInit(); setRecover(false); pending.current = false; await scan(); } catch (value) { setError(String(value)); }
+    finally { pending.current = false; setBusy(false); }
   };
 
   return (
@@ -1219,7 +1232,7 @@ function Init({ onDone, recoveryPath }: { onDone: (count: number) => void; recov
                 const group = items.filter((item) => item.kind === id && (scanSource === "all" || item.source === scanSource));
                 const groupSelected = group.filter((item) => item.importable && selected.has(item.id)).length;
                 return (
-                  <button type="button" role="tab" aria-selected={scanKind === id} className={scanKind === id ? "is-selected" : ""} onClick={() => setScanKind(id)} key={id}>
+                  <button type="button" role="tab" aria-selected={scanKind === id} className={scanKind === id ? "is-selected" : ""} disabled={busy} onClick={() => setScanKind(id)} key={id}>
                     <KindIcon size={17} /><span><strong>{t(`kinds.${id}`)}</strong><small>{groupSelected} / {group.filter((item) => item.importable).length}</small></span>
                   </button>
                 );
@@ -1227,7 +1240,7 @@ function Init({ onDone, recoveryPath }: { onDone: (count: number) => void; recov
             </div>
             <div className="scan-group-toolbar">
               <span>{t(`kinds.${scanKind}`)} · {visibleScanItems.length} {t("init.discovered")}</span>
-              <Button variant="quiet" disabled={busy || visibleImportableItems.length === 0} onClick={() => setSelected((current) => { const next = new Set(current); if (visibleSelectedCount === visibleImportableItems.length) visibleImportableItems.forEach((item) => next.delete(item.id)); else visibleImportableItems.forEach((item) => next.add(item.id)); return next; })}>{visibleSelectedCount === visibleImportableItems.length && visibleImportableItems.length > 0 ? t("init.clearGroup") : t("init.selectGroup")}</Button>
+              <Button variant="quiet" disabled={busy || visibleImportableItems.length === 0} onClick={() => setSelected((current) => { const next = new Set(current); if (visibleImportableItems.every((item) => current.has(item.id))) visibleImportableItems.forEach((item) => next.delete(item.id)); else visibleImportableItems.forEach((item) => next.add(item.id)); return next; })}>{visibleSelectedCount === visibleImportableItems.length && visibleImportableItems.length > 0 ? t("init.clearGroup") : t("init.selectGroup")}</Button>
             </div>
             <div className="scan-list">
               {!items.length && <EmptyState icon={Boxes} title={t("inventory.empty")} body={t("init.none")} />}

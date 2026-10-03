@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 import App from "./App";
 import { api, type HostResource } from "./lib/api";
@@ -109,6 +109,41 @@ it("shows all supported import sources even when only Claude has discoveries", a
   expect(screen.getByRole("button", { name: /Cursor 0 \/ 0/ })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: /共享 Agents 0 \/ 0/ })).toBeInTheDocument();
   expect(screen.getByText(/此来源未发现资源/)).toBeInTheDocument();
+});
+
+it("uses the latest selection for rapid source and category toggles", async () => {
+  vi.spyOn(api, "dashboard").mockResolvedValue({ initialized: false, inventory: {}, enabled_targets: [], auto_sync_targets: [], dirty: false, recent_transactions: [] });
+  vi.spyOn(api, "scan").mockResolvedValue([{ id: "one", source: "agents", path: "/h/.agents/skills/parent", digest: "one", kind: "skill", selected: false, importable: true }]);
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: /开始全局扫描/ }));
+  const source = await screen.findByRole("button", { name: "选择当前来源全部" });
+  act(() => { source.click(); source.click(); });
+  expect(screen.getByRole("status")).toHaveTextContent("共选择 0");
+  const category = screen.getByRole("button", { name: "选择本类" });
+  act(() => { category.click(); category.click(); });
+  expect(screen.getByRole("status")).toHaveTextContent("共选择 0");
+  expect(screen.getByRole("heading", { name: "建立 AgentHub 库" })).toBeInTheDocument();
+});
+
+it("blocks repeated import, preserves selection on failure and allows retry", async () => {
+  vi.spyOn(api, "dashboard").mockResolvedValue({ initialized: false, inventory: {}, enabled_targets: [], auto_sync_targets: [], dirty: false, recent_transactions: [] });
+  vi.spyOn(api, "scan").mockResolvedValue([{ id: "parent", source: "agents", path: "/h/.agents/skills/parent", digest: "one", kind: "skill", selected: false, importable: true }]);
+  let rejectImport!: (error: Error) => void;
+  const finish = vi.spyOn(api, "finishInit").mockImplementationOnce(() => new Promise((_, reject) => { rejectImport = reject; })).mockResolvedValueOnce(["parent"]);
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: /开始全局扫描/ }));
+  fireEvent.click(await screen.findByRole("checkbox"));
+  const submit = screen.getByRole("button", { name: /导入所选并完成/ });
+  act(() => { submit.click(); submit.click(); });
+  expect(finish).toHaveBeenCalledTimes(1);
+  expect(screen.getByRole("checkbox")).toBeDisabled();
+  expect(screen.getAllByRole("tab").every((tab) => (tab as HTMLButtonElement).disabled)).toBe(true);
+  await act(async () => rejectImport(new Error("Import failed")));
+  expect(screen.getByRole("alert")).toHaveTextContent("Import failed");
+  expect(screen.getByRole("checkbox")).toBeChecked();
+  fireEvent.click(screen.getByRole("button", { name: /导入所选并完成/ }));
+  await waitFor(() => expect(finish).toHaveBeenCalledTimes(2));
+  expect(finish).toHaveBeenLastCalledWith(["parent"]);
 });
 
 it("preserves cross-kind selection through search and confirms the exact batch", async () => {

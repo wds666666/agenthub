@@ -15,7 +15,7 @@ Official references: [Codex plugins](https://developers.openai.com/plugins/build
 ## Cursor
 
 - User skills are read from `~/.cursor/skills` and the shared `~/.agents/skills` convention.
-- Cursor recursively discovers nested Skill folders and also recognizes Claude/Codex compatibility directories. AgentHub therefore scans nested user Skill roots and treats `~/.agents/skills` as an independent shared projection rather than a Cursor alias.
+- AgentHub discovers only immediate child directories containing `SKILL.md` in each allowlisted Skills root. Nested skills are not separate import candidates; a selected parent skill retains its complete supporting directory tree. `~/.agents/skills` remains an independent shared projection rather than a Cursor alias.
 - User MCP is `~/.cursor/mcp.json`, under the `mcpServers` key. Other top-level JSON values are not part of AgentHub's capability domain.
 - Plugins use the Agent Plugin format or `.cursor-plugin/plugin.json`; writable local plugins are under `~/.cursor/plugins/local`.
 - User Rules do not have a stable file API equivalent to project `.cursor/rules`; AgentHub therefore projects Rules through one generated global local plugin.

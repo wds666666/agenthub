@@ -1,6 +1,8 @@
 # 验证、构建与发布
 
-默认版本号读取 `package.json`，与 `Cargo.toml`、`Cargo.lock` 和 Tauri 配置一致。**用户未指定新版本号时，不改版本号、不自动递增。** 当前版本为 `0.1.3`。
+默认版本号读取 `package.json`，与 `Cargo.toml`、`Cargo.lock` 和 Tauri 配置一致。**用户未指定新版本号时，不改版本号、不自动递增。** 当前版本为 `0.1.4`。
+
+导入交互修改需运行 `pnpm test:e2e`，覆盖 Chromium 与 WebKit 的连续选择、键盘、来源切换和窄窗口。首次运行先执行 `pnpm exec playwright install --with-deps chromium webkit`；CI 应用检查也执行这组回归。浏览器测试只模拟 IPC，不访问真实工具目录。
 
 ## 什么时候执行什么
 

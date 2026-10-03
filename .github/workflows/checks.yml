@@ -36,8 +36,8 @@ jobs:
           else:
               files = subprocess.check_output(["git", "ls-files"], text=True).splitlines()
           prefixes = ("src/", "src-tauri/", "crates/")
-          names = {"Cargo.toml", "Cargo.lock", "package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "vite.config.ts", "index.html", "eslint.config.js"}
-          code = any(p.startswith(prefixes) or p in names or p.startswith("tsconfig") or (p.startswith("scripts/") and p.endswith(".ps1")) for p in files)
+          names = {"Cargo.toml", "Cargo.lock", "package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "vite.config.ts", "playwright.config.ts", "index.html", "eslint.config.js"}
+          code = any(p.startswith(prefixes) or p.startswith("tests/e2e/") or p in names or p.startswith("tsconfig") or (p.startswith("scripts/") and p.endswith(".ps1")) for p in files)
           with open(os.environ["GITHUB_OUTPUT"], "a") as output:
               output.write(f"code={str(code).lower()}\n")
           PYTHON
@@ -83,6 +83,8 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm lint
           pnpm test
+          pnpm exec playwright install --with-deps chromium webkit
+          pnpm test:e2e
           pnpm build
           cargo fmt --all -- --check
           cargo clippy -p agenthub-core -p agenthub-cli --all-targets -- -D warnings

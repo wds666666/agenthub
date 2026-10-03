@@ -114,18 +114,50 @@ fn scanner_is_strictly_user_global() {
 }
 
 #[test]
-fn scanner_finds_nested_agent_skills_without_entering_hidden_directories() {
+fn scanner_discovers_only_first_level_skills_and_imports_complete_parent_trees() {
     let (temp, hub) = fixture();
-    let nested = temp.path().join(".agents/skills/team/review");
-    fs::create_dir_all(&nested).unwrap();
-    fs::write(nested.join("SKILL.md"), "# Review").unwrap();
-    let hidden = temp.path().join(".agents/skills/.cache/hidden");
-    fs::create_dir_all(&hidden).unwrap();
-    fs::write(hidden.join("SKILL.md"), "# Hidden").unwrap();
+    for (tool, name) in [
+        ("agents", "lark"),
+        ("cursor", "cursor-parent"),
+        ("codex", "codex-parent"),
+        ("claude", "claude-parent"),
+    ] {
+        let root = temp.path().join(format!(".{tool}/skills"));
+        let parent = root.join(name);
+        fs::create_dir_all(parent.join("child")).unwrap();
+        fs::write(parent.join("SKILL.md"), format!("# {name}")).unwrap();
+        fs::write(parent.join("child/SKILL.md"), "# Nested instruction").unwrap();
+        fs::write(parent.join("child/resource.txt"), "supporting file").unwrap();
+        for ignored in ["team/review", ".cache/hidden", ".system"] {
+            let path = root.join(ignored);
+            fs::create_dir_all(&path).unwrap();
+            fs::write(path.join("SKILL.md"), "# Not a first-level skill").unwrap();
+        }
+        fs::write(root.join("SKILL.md"), "# Root is not a skill").unwrap();
+    }
 
-    let found = scanner::scan_global(&hub.paths, &[Target::Agents]).unwrap();
-    assert_eq!(found.len(), 1);
-    assert!(found[0].path.ends_with("team/review"));
+    let mut found = scanner::scan_global(&hub.paths, &Target::ALL).unwrap();
+    assert_eq!(found.len(), 4);
+    for item in &mut found {
+        assert_eq!(item.kind, CapabilityKind::Skill);
+        assert_eq!(item.path.parent().unwrap().file_name().unwrap(), "skills");
+        item.selected = true;
+    }
+    let imported = canonical::import_initial_atomic(&hub.paths, &found).unwrap();
+    assert_eq!(imported.len(), 4);
+    assert_eq!(canonical::validate(&hub.paths).unwrap().len(), 4);
+    assert!(!hub.paths.skills.join("child").exists());
+    for item in &found {
+        let parent = hub.paths.skills.join(item.path.file_name().unwrap());
+        assert_eq!(
+            canonical::tree_digest(&parent).unwrap(),
+            canonical::tree_digest(&item.path).unwrap()
+        );
+        assert_eq!(
+            fs::read_to_string(parent.join("child/SKILL.md")).unwrap(),
+            "# Nested instruction"
+        );
+    }
 }
 
 #[test]

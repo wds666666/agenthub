@@ -81,7 +81,7 @@ fn collect_skills(root: &Path, source: &str, out: &mut Vec<ScanItem>) -> Result<
     }
     for e in WalkDir::new(root)
         .min_depth(1)
-        .max_depth(8)
+        .max_depth(1)
         .follow_links(false)
         .into_iter()
         .filter_entry(|entry| {
