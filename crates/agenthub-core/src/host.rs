@@ -220,6 +220,11 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
 }
 
 fn copy_path(source: &Path, destination: &Path) -> Result<()> {
+    anyhow::ensure!(
+        !fs::symlink_metadata(source)?.file_type().is_symlink(),
+        "backup root must not be a symlink: {}",
+        source.display()
+    );
     if source.is_file() {
         fs::create_dir_all(destination.parent().context("backup parent")?)?;
         fs::copy(source, destination)?;
@@ -227,16 +232,15 @@ fn copy_path(source: &Path, destination: &Path) -> Result<()> {
     }
     for entry in WalkDir::new(source).follow_links(false) {
         let entry = entry?;
-        anyhow::ensure!(
-            !entry.file_type().is_symlink(),
-            "refusing to back up symlink: {}",
-            entry.path().display()
-        );
         let dest = destination.join(entry.path().strip_prefix(source)?);
-        if entry.file_type().is_dir() {
+        if entry.file_type().is_symlink() {
+            crate::backup::copy_link(entry.path(), &dest)?;
+        } else if entry.file_type().is_dir() {
             fs::create_dir_all(dest)?;
-        } else {
+        } else if entry.file_type().is_file() {
             fs::copy(entry.path(), dest)?;
+        } else {
+            anyhow::bail!("unsupported backup file type: {}", entry.path().display());
         }
     }
     Ok(())

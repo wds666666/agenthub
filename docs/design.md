@@ -68,3 +68,5 @@ Import source navigation uses the existing scan tab visual family with toggle-bu
 Import checkbox hit areas are anchored to the containing row, including narrow layouts. Keyboard focus outlines the visible checkbox. Initialization panel bounds use the same viewport inset as its shell, preventing an unnecessary document scrollbar alongside the bounded result list.
 
 Library selection uses persistent row checkboxes and a wrapping toolbar with selected count, visible-result/category shortcuts, clear and a named danger action. Confirmation lists every selected resource; a successful batch leaves a readable recovery path. Import source buttons always include all supported tools, wrap within narrow dialogs, and separate discovered/new-resource counts. No new color or component vocabulary is introduced.
+
+Git login reuses Dialog, field, Button, StatusBadge and inline-error owners. Repository verification and stored credentials have separate readable labels. Token reveal controls have a localized accessible name and never persist the token in browser storage.

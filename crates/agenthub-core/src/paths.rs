@@ -65,13 +65,25 @@ impl AgentHubPaths {
         if !self.root.join(".gitignore").exists() {
             fs::write(
                 self.root.join(".gitignore"),
-                ".gitignore\nstate/\nsecrets/\nbackups/\nprojections/\nruntime/\n*.log\n",
+                "/.gitignore\n/state/\n/secrets/\n/backups/\n/projections/\n/runtime/\n*.log\n",
             )?;
         } else {
             let ignore_path = self.root.join(".gitignore");
             let current = fs::read_to_string(&ignore_path)?;
-            if !current.lines().any(|line| line.trim() == ".gitignore") {
-                fs::write(&ignore_path, format!(".gitignore\n{current}"))?;
+            let mut lines: Vec<String> = current
+                .lines()
+                .map(|line| match line.trim() {
+                    ".gitignore" | "state/" | "secrets/" | "backups/" | "projections/"
+                    | "runtime/" => format!("/{}", line.trim()),
+                    _ => line.to_owned(),
+                })
+                .collect();
+            if !lines.iter().any(|line| line.trim() == "/.gitignore") {
+                lines.insert(0, "/.gitignore".into());
+            }
+            let migrated = format!("{}\n", lines.join("\n"));
+            if migrated != current {
+                fs::write(&ignore_path, migrated)?;
             }
         }
         if !self.root.join("agenthub.toml").exists() {

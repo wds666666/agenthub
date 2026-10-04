@@ -58,6 +58,18 @@ fn err(e: impl std::fmt::Display) -> String {
     agenthub_core::secrets::redact(&e.to_string())
 }
 
+fn import_error(area: &str, error: anyhow::Error) -> String {
+    let message = err(format!("{error:#}"));
+    // Keep the cause chain: ordinary trace entries truncate to 180 characters.
+    let detail: String = message
+        .replace(['\n', '\r'], " ")
+        .chars()
+        .take(4096)
+        .collect();
+    log::error!("[agenthub][{area}] import_failed {detail}");
+    message
+}
+
 fn trace(area: &str, event: &str, context: impl std::fmt::Display) {
     let context = agenthub_core::secrets::redact(&context.to_string().replace(['\n', '\r'], " "));
     let context: String = context.chars().take(180).collect();
@@ -319,7 +331,8 @@ fn import_scanned(selected_ids: Vec<String>) -> Result<ScanImportResult, String>
         }
     }
     let selected_count = items.iter().filter(|item| item.selected).count();
-    let imported = canonical::import_scan_items_atomic(&h.paths, &items).map_err(err)?;
+    let imported = canonical::import_scan_items_atomic(&h.paths, &items)
+        .map_err(|error| import_error("reverse_import", error))?;
     skipped_duplicates += selected_count.saturating_sub(imported.len());
     let auto_sync = transaction::run_auto_sync(&h.paths, &h.store).map_err(err)?;
     Ok(ScanImportResult {
@@ -352,10 +365,8 @@ fn finish_init(selected_ids: Vec<String>) -> Result<Vec<String>, String> {
     if matched != selected.len() {
         return Err("scan result changed; scan again before importing".into());
     }
-    let ids = canonical::import_initial_atomic(&h.paths, &items).map_err(|error| {
-        trace("init", "import_failed", err(&error));
-        err(error)
-    })?;
+    let ids = canonical::import_initial_atomic(&h.paths, &items)
+        .map_err(|error| import_error("init", error))?;
     git::ensure_repo(&h.paths.root).map_err(err)?;
     h.store.set_initialized(true).map_err(err)?;
     trace(
@@ -593,6 +604,46 @@ fn connect_remote(url: String, branch: String) -> Result<git::RemoteSettings, St
     git::connect_remote(&h.paths.root, &url, &branch).map_err(err)
 }
 #[tauri::command(async)]
+fn login_remote(
+    url: String,
+    branch: String,
+    username: String,
+    token: String,
+) -> Result<git::RemoteSettings, String> {
+    let h = hub()?;
+    agenthub_core::git_auth::login(&h.paths.root, &url, &branch, &username, &token).map_err(err)
+}
+#[tauri::command(async)]
+fn forget_remote_credentials() -> Result<(), String> {
+    let h = hub()?;
+    agenthub_core::git_auth::forget(&h.paths.root).map_err(err)
+}
+#[tauri::command(async)]
+fn open_token_settings(url: String, platform: String) -> Result<(), String> {
+    let address = agenthub_core::git_auth::token_settings(&url, &platform).map_err(err)?;
+    #[cfg(target_os = "linux")]
+    let mut process = std::process::Command::new("xdg-open");
+    #[cfg(target_os = "macos")]
+    let mut process = std::process::Command::new("open");
+    #[cfg(target_os = "windows")]
+    let mut process = {
+        use std::os::windows::process::CommandExt;
+        let mut command = std::process::Command::new("rundll32.exe");
+        command
+            .arg("url.dll,FileProtocolHandler")
+            .creation_flags(0x0800_0000);
+        command
+    };
+    process
+        .arg(address)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(err)?;
+    Ok(())
+}
+#[tauri::command(async)]
 fn disconnect_remote() -> Result<(), String> {
     let h = hub()?;
     git::disconnect_remote(&h.paths.root).map_err(err)
@@ -666,6 +717,9 @@ pub fn run() {
             reset_agenthub,
             remote_settings,
             connect_remote,
+            login_remote,
+            forget_remote_credentials,
+            open_token_settings,
             disconnect_remote,
             sync_remote
         ])

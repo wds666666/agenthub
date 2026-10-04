@@ -1,6 +1,8 @@
 pub mod adapters;
+mod backup;
 pub mod canonical;
 pub mod git;
+pub mod git_auth;
 pub mod host;
 pub mod models;
 pub mod paths;
@@ -8,6 +10,7 @@ pub mod planner;
 pub mod reset;
 pub mod scanner;
 pub mod secrets;
+mod skill_content;
 pub mod storage;
 pub mod transaction;
 

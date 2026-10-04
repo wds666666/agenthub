@@ -118,6 +118,7 @@ export function Dialog({
   onClose,
   actions,
   wide = false,
+  dismissible = true,
 }: {
   open: boolean;
   title: string;
@@ -125,6 +126,7 @@ export function Dialog({
   onClose: () => void;
   actions: ReactNode;
   wide?: boolean;
+  dismissible?: boolean;
 }) {
   const closeRef = useRef<HTMLButtonElement>(null);
   const onCloseRef = useRef(onClose);
@@ -165,7 +167,7 @@ export function Dialog({
       <section className={`dialog ${wide ? "dialog--wide" : ""}`} role="dialog" aria-modal="true" aria-labelledby="dialog-title">
         <header>
           <h2 id="dialog-title">{title}</h2>
-          <button ref={closeRef} type="button" className="icon-button" onClick={onClose} aria-label={t("common.close")}>
+          <button ref={closeRef} type="button" className="icon-button" disabled={!dismissible} onClick={onClose} aria-label={t("common.close")}>
             <X size={19} />
           </button>
         </header>

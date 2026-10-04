@@ -119,6 +119,8 @@ pub struct ScanItem {
     #[serde(default)]
     pub source_key: Option<String>,
     pub warning: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning_detail: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

@@ -26,7 +26,7 @@ Automatic sync is coordinated inside `agenthub-core`. AgentHub mutation commands
 
 Post-initialization discovery is an explicit reverse-import workflow. It scans only the user-global allowlist, groups exact content duplicates across sources, and imports only user-selected new content into Canonical. It never runs in the background, scans projects, or silently resolves same-ID/different-content conflicts.
 
-Skill discovery is limited to immediate child directories of each allowlisted Skills root. Hidden directories and deeper folders are not separate resources. Digests and imports still include the entire selected skill tree, preserving nested instructions and supporting files together with their parent.
+Skill discovery is limited to immediate child directories of each allowlisted Skills root. Hidden directories and deeper folders are not separate resources. Skill digests and imports share a portable-content traversal: nested instructions and supporting files stay with their parent; local virtual environments, dependency installations, Git metadata and generated caches are excluded. Scan preflight rejects nonportable symlinks/special files and invalid instruction files before selection, with a reason per resource. Import repeats the same checks and remains atomic.
 
 Host inventory is a separate read-only projection of the same user-global allowlist. It never implies ownership: every entry is classified as a Canonical match, host-only content, or a protected host constraint. The desktop may request an explicit cleanup transaction for selected writable entries. Cleanup re-scans stable IDs, backs up every affected path under `backups/host-cleanup-<id>/`, mutates only the selected resource, and automatically restores the backup on failure. Collection files such as MCP JSON/TOML are edited at the selected server key while preserving unrelated top-level configuration.
 
@@ -37,3 +37,7 @@ Deleting SQLite permits inventory reconstruction from Canonical files. Transacti
 ## Library reset and remote versions
 Desktop operations are serialized by a process-wide guard. Reset closes SQLite, moves the complete active root to a private sibling recovery directory, creates a fresh uninitialized root, and returns to import selection. Hosts are untouched; all automatic profiles and remote settings are reset. Recovery copies contain secrets and must stay private.
 Remote settings live in repository-local Git configuration, not versioned content. Version saves commit locally first; remote failures are returned separately from local success. Explicit remote sync requires a clean working tree and reconciles by fetch and merge before push. Remote updates do not silently project to hosts.
+
+## Local repository authentication
+
+GitHub and self-hosted Git/Gitea HTTPS repositories accept a username and access token in the desktop. Desktop and CLI share the core authentication module and local encrypted credentials. Both executables can dispatch the built-in Git credential helper without starting a window or requiring a separate installation. Read verification precedes connection persistence; loading the page never contacts the remote. SSH and repositories without an AgentHub credential continue using existing system authentication.

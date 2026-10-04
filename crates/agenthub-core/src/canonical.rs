@@ -597,7 +597,7 @@ pub fn import_scan_items(paths: &AgentHubPaths, items: &[ScanItem]) -> Result<Ve
         let id = unique_id(paths, item.kind, &slug(base));
         (|| -> Result<()> {
             match item.kind {
-                CapabilityKind::Skill => copy_checked(&item.path, &paths.skills.join(&id))?,
+                CapabilityKind::Skill => crate::skill_content::copy(&item.path, &paths.skills.join(&id))?,
                 CapabilityKind::Plugin => {
                     let dest = paths.plugins.join(&id);
                     let (format, source_manifest, components) = inspect_plugin(&item.path)?;
@@ -783,6 +783,11 @@ fn scan_warning_message(code: Option<&str>) -> &'static str {
         Some("rule_empty") => "rule file is empty",
         Some("rule_too_large") => "rule file is larger than 1 MB",
         Some("rule_invalid_encoding") => "rule file must use UTF-8 encoding",
+        Some("skill_symlink") => "skill contains a nonportable symlink",
+        Some("skill_special_file") => "skill contains a special file",
+        Some("skill_empty") => "SKILL.md is empty",
+        Some("skill_invalid_encoding") => "SKILL.md must use UTF-8 encoding",
+        Some("skill_unreadable") => "skill content cannot be read",
         _ => "validation failed",
     }
 }

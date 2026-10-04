@@ -198,6 +198,7 @@ fn mcp_item(source: &str, path: PathBuf, name: &str, digest: String) -> ScanItem
         importable: true,
         source_key: Some(source_key),
         warning: None,
+        warning_detail: None,
     }
 }
 fn item(
@@ -206,7 +207,43 @@ fn item(
     path: PathBuf,
     source_key: Option<String>,
 ) -> Result<ScanItem> {
-    let digest = tree_digest(&path)?;
+    let (digest, importable, warning, warning_detail) = if kind == CapabilityKind::Skill {
+        match crate::skill_content::inspect(&path) {
+            Ok(content) => {
+                let detail = (!content.excluded.is_empty()).then(|| {
+                    content
+                        .excluded
+                        .iter()
+                        .map(|path| path.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                });
+                (
+                    content.digest,
+                    true,
+                    detail.as_ref().map(|_| "skill_runtime_excluded".into()),
+                    detail,
+                )
+            }
+            Err(error) => {
+                let warning = match error.downcast_ref::<crate::skill_content::SkillError>() {
+                    Some(crate::skill_content::SkillError::Symlink(_)) => "skill_symlink",
+                    Some(crate::skill_content::SkillError::SpecialFile(_)) => "skill_special_file",
+                    Some(crate::skill_content::SkillError::Empty) => "skill_empty",
+                    Some(crate::skill_content::SkillError::Encoding) => "skill_invalid_encoding",
+                    None => "skill_unreadable",
+                };
+                (
+                    crate::skill_content::invalid_digest(&path),
+                    false,
+                    Some(warning.into()),
+                    Some(crate::secrets::redact(&format!("{error:#}"))),
+                )
+            }
+        }
+    } else {
+        (tree_digest(&path)?, true, None, None)
+    };
     let id = sha256(
         format!(
             "{}:{}:{}:{}:{}",
@@ -225,9 +262,10 @@ fn item(
         digest,
         path,
         selected: false,
-        importable: true,
+        importable,
         source_key,
-        warning: None,
+        warning,
+        warning_detail,
     })
 }
 

@@ -146,6 +146,28 @@ it("blocks repeated import, preserves selection on failure and allows retry", as
   expect(finish).toHaveBeenLastCalledWith(["parent"]);
 });
 
+it("explains skipped runtime directories and excludes unsafe skills from select all", async () => {
+  vi.spyOn(api, "dashboard").mockResolvedValue({ initialized: false, inventory: {}, enabled_targets: [], auto_sync_targets: [], dirty: false, recent_transactions: [] });
+  vi.spyOn(api, "scan").mockResolvedValue([
+    { id: "pdf", source: "agents", path: "/h/.agents/skills/pdf-read", digest: "portable", kind: "skill", selected: false, importable: true, warning: "skill_runtime_excluded", warning_detail: ".venv" },
+    { id: "unsafe", source: "agents", path: "/h/.agents/skills/unsafe", digest: "invalid", kind: "skill", selected: false, importable: false, warning: "skill_symlink", warning_detail: "scripts/external.py" },
+  ]);
+  const finish = vi.spyOn(api, "finishInit").mockResolvedValue(["pdf-read"]);
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: /开始全局扫描/ }));
+  expect(await screen.findByText("已跳过本机环境和缓存，保留技能文件与依赖清单")).toBeInTheDocument();
+  expect(screen.getByText(".venv")).toBeInTheDocument();
+  expect(screen.getByText("scripts/external.py")).toBeInTheDocument();
+  const checkboxes = screen.getAllByRole("checkbox");
+  expect(checkboxes[0]).toBeEnabled();
+  expect(checkboxes[1]).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: /^全选$/ }));
+  expect(checkboxes[0]).toBeChecked();
+  expect(checkboxes[1]).not.toBeChecked();
+  fireEvent.click(screen.getByRole("button", { name: /导入所选并完成/ }));
+  await waitFor(() => expect(finish).toHaveBeenCalledWith(["pdf"]));
+});
+
 it("preserves cross-kind selection through search and confirms the exact batch", async () => {
   vi.spyOn(api, "dashboard").mockResolvedValue({ initialized: true, inventory: { skill: 1, rule: 1 }, enabled_targets: [], auto_sync_targets: [], dirty: false, recent_transactions: [] });
   const capabilities = [
@@ -169,4 +191,32 @@ it("preserves cross-kind selection through search and confirms the exact batch",
   fireEvent.click(screen.getByRole("button", { name: "删除所选能力 (2)" }));
   await waitFor(() => expect(remove).toHaveBeenCalledWith([{ kind: "skill", id: "same" }, { kind: "rule", id: "same" }]));
   expect(await screen.findByText("/hub/backups/library-delete-test")).toBeInTheDocument();
+});
+
+it("separates configured repositories from verified access and keeps tokens out of browser storage", async () => {
+  vi.spyOn(api, "remoteSettings").mockResolvedValue({ url: "https://git.example/team/skills.git", branch: "agenthub", state: "unverified", credential_saved: false });
+  const login = vi.spyOn(api, "loginRemote").mockRejectedValueOnce(new Error("Authentication failed")).mockResolvedValue({ url: "https://git.example/team/skills.git", branch: "agenthub", state: "read_verified", credential_saved: true });
+  const sync = vi.spyOn(api, "syncRemote").mockResolvedValue();
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: /^版本记录$/ }));
+  expect(await screen.findByText("仓库已配置，尚未验证")).toBeInTheDocument();
+  expect(screen.queryByText("上次验证可读取")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /^仓库登录$/ }));
+  const token = screen.getByLabelText(/^访问令牌$/);
+  expect(token).toHaveAttribute("type", "password");
+  fireEvent.change(screen.getByLabelText("登录用户名"), { target: { value: "tester" } });
+  fireEvent.change(token, { target: { value: "fixture-token" } });
+  fireEvent.click(screen.getByRole("button", { name: "显示访问令牌" }));
+  expect(token).toHaveAttribute("type", "text");
+  fireEvent.click(screen.getByRole("button", { name: "验证并保存登录" }));
+  expect(await screen.findByText("Error: Authentication failed")).toBeInTheDocument();
+  expect(token).toHaveValue("fixture-token");
+  fireEvent.click(screen.getByRole("button", { name: "验证并保存登录" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  expect(login).toHaveBeenLastCalledWith("https://git.example/team/skills.git", "agenthub", "tester", "fixture-token");
+  expect(sync).not.toHaveBeenCalled();
+  expect(screen.getByText("上次验证可读取")).toBeInTheDocument();
+  expect(JSON.stringify(localStorage)).not.toContain("fixture-token");
+  fireEvent.click(screen.getByRole("button", { name: /^仓库登录$/ }));
+  expect(screen.getByLabelText(/^访问令牌$/)).toHaveValue("");
 });

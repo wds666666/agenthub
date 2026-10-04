@@ -97,6 +97,15 @@ enum AutoSyncCommand {
 #[derive(Subcommand)]
 enum GitCommand {
     RemoteStatus,
+    /// Read a repository access token from stdin; never pass it as an argument.
+    Login {
+        url: String,
+        #[arg(long, default_value = "main")]
+        branch: String,
+        #[arg(long)]
+        username: String,
+    },
+    ForgetCredentials,
     Connect {
         url: String,
         #[arg(long, default_value = "main")]
@@ -135,6 +144,9 @@ impl std::str::FromStr for TargetArg {
 }
 
 fn main() -> Result<()> {
+    if agenthub_core::git_auth::dispatch_helper() {
+        return Ok(());
+    }
     let cli = Cli::parse();
     let hub = AgentHub::open_default()?;
     match cli.command {
@@ -268,6 +280,25 @@ fn main() -> Result<()> {
             serde_json::to_string_pretty(&hub.store.recent_transactions(100)?)?
         ),
         Command::Git { command } => match command {
+            GitCommand::Login {
+                url,
+                branch,
+                username,
+            } => {
+                let mut token = String::new();
+                io::stdin().read_to_string(&mut token)?;
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&agenthub_core::git_auth::login(
+                        &hub.paths.root,
+                        &url,
+                        &branch,
+                        &username,
+                        token.trim_end_matches(['\r', '\n'])
+                    )?)?
+                );
+            }
+            GitCommand::ForgetCredentials => agenthub_core::git_auth::forget(&hub.paths.root)?,
             GitCommand::RemoteStatus => println!(
                 "{}",
                 serde_json::to_string_pretty(&git::remote_settings(&hub.paths.root)?)?

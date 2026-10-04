@@ -679,6 +679,7 @@ code, pre { font-family: var(--mono); font-variant-ligatures: none; }
 .scan-copy small b { flex: none; padding: 2px 5px; color: var(--blue); font-size: 8px; font-weight: 680; background: var(--blue-soft); border-radius: 5px; }
 .scan-copy small span { overflow: hidden; font-family: var(--mono); text-overflow: ellipsis; white-space: nowrap; }
 .scan-copy em { margin-top: 3px; color: var(--amber); font-size: 9px; font-style: normal; }
+.scan-warning-detail { display: block; overflow-wrap: anywhere; font-family: var(--mono); }
 .scan-list label > code { color: var(--ink-tertiary); font-size: 9px; }
 .scan-footer { display: flex; align-items: center; justify-content: space-between; gap: 15px; padding: 13px 14px 13px 18px; background: var(--material-inset); border-top: 1px solid var(--line); }
 .scan-footer > span { color: var(--ink-tertiary); font-family: var(--mono); font-size: 10px; }
@@ -810,3 +811,17 @@ code, pre { font-family: var(--mono); font-variant-ligatures: none; }
 .batch-delete-list li { display: flex; flex-direction: column; gap: 4px; padding: 10px; border-bottom: 1px solid var(--line); }
 .batch-delete-list li span, .import-source-hint { color: var(--ink-secondary); font-size: 12px; }
 .scan-source-tabs button { min-width: 0; }
+
+.remote-auth-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin: 16px 0; }
+.remote-credential-label { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-secondary); font-size: 12px; }
+.git-login-form { display: grid; gap: 18px; }
+.git-login-form p { margin: 0; color: var(--ink-secondary); line-height: 1.6; }
+.git-login-repository { display: block; overflow-wrap: anywhere; padding: 12px; border-radius: 10px; background: var(--material-inset); }
+.git-login-platform { border: 0; padding: 0; margin: 0; }
+.git-login-platform legend { margin-bottom: 8px; font-size: 12px; color: var(--ink-secondary); }
+.git-login-platform > div { display: flex; gap: 10px; flex-wrap: wrap; }
+.git-token-input { display: flex; gap: 8px; align-items: stretch; }
+.git-token-input input { flex: 1; min-width: 0; }
+.git-token-input .button { flex-shrink: 0; }
+.git-login-privacy { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; }
+.git-login-privacy svg { flex-shrink: 0; margin-top: 3px; }

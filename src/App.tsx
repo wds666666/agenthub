@@ -489,7 +489,7 @@ function Inventory({ onChanged, onNotify }: { onChanged: () => void; onNotify: (
         <div className="scan-group-toolbar"><span>{visibleScanItems.length} {t("init.discovered")}</span><Button variant="quiet" disabled={scanBusy || !scanImportableItems.some((item) => item.kind === scanKind && (scanSource === "all" || item.source === scanSource))} onClick={() => setScanSelected((current) => { const next = new Set(current); const available = scanImportableItems.filter((item) => item.kind === scanKind && (scanSource === "all" || item.source === scanSource)); const allSelected = available.every((item) => next.has(item.id)); available.forEach((item) => allSelected ? next.delete(item.id) : next.add(item.id)); return next; })}>{t("init.selectGroup")}</Button></div>
         <div className="scan-list scan-list--dialog">
           {visibleScanItems.length === 0 && <EmptyState icon={Boxes} title={t("init.emptyGroup")} body={t("init.emptyGroupHint")} compact />}
-          {visibleScanItems.map((item) => { const exists = canonicalDigests.has(`${item.kind}:${item.digest}`); const disabled = !item.importable || exists; const checked = scanSelected.has(item.id); const name = item.source_key?.replace(/^server:/, "") ?? item.path.split(/[\\/]/).pop(); return <label className={`${checked ? "is-selected" : ""} ${disabled ? "is-disabled" : ""}`} key={item.id}><input type="checkbox" checked={checked} disabled={scanBusy || disabled} onChange={() => setScanSelected((current) => { const next = new Set(current); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next; })} /><span className="scan-check">{disabled ? <AlertTriangle size={15} /> : <CheckCircle2 size={17} />}</span><span className="scan-copy"><strong>{name}</strong><small><b>{item.source}</b><span>{item.path}</span></small>{exists && <em>{t("inventory.alreadyCanonical")}</em>}{!exists && item.warning && <em>{t(`init.${item.warning}`)}</em>}</span><code>{item.digest.slice(0, 8)}</code></label>; })}
+          {visibleScanItems.map((item) => { const exists = canonicalDigests.has(`${item.kind}:${item.digest}`); const disabled = !item.importable || exists; const checked = scanSelected.has(item.id); const name = item.source_key?.replace(/^server:/, "") ?? item.path.split(/[\\/]/).pop(); return <label className={`${checked ? "is-selected" : ""} ${disabled ? "is-disabled" : ""}`} key={item.id}><input type="checkbox" checked={checked} disabled={scanBusy || disabled} onChange={() => setScanSelected((current) => { const next = new Set(current); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next; })} /><span className="scan-check">{disabled ? <AlertTriangle size={15} /> : <CheckCircle2 size={17} />}</span><span className="scan-copy"><strong>{name}</strong><small><b>{item.source}</b><span>{item.path}</span></small>{exists && <em>{t("inventory.alreadyCanonical")}</em>}{!exists && <ScanWarning item={item} />}</span><code>{item.digest.slice(0, 8)}</code></label>; })}
         </div>
       </Dialog>
     </>
@@ -907,13 +907,30 @@ function GitPage({ onCommitted }: { onCommitted: () => void }) {
   const [remoteBranch, setRemoteBranch] = useState("main");
   const [remoteError, setRemoteError] = useState("");
   const [remoteNotice, setRemoteNotice] = useState("");
+  const [loginOpen, setLoginOpen] = useState(false);
+  const [loginPlatform, setLoginPlatform] = useState<"github" | "git">("git");
+  const [loginUsername, setLoginUsername] = useState("");
+  const [loginToken, setLoginToken] = useState("");
+  const [tokenVisible, setTokenVisible] = useState(false);
+  const [loginError, setLoginError] = useState("");
+  const [retryAfterLogin, setRetryAfterLogin] = useState(false);
+  const openLogin = (retry = false) => {
+    setLoginPlatform(/^https:\/\/github\.com\//i.test(remoteUrl) ? "github" : "git");
+    setRetryAfterLogin(retry); setLoginError(""); setLoginToken(""); setTokenVisible(false); setLoginOpen(true);
+  };
+  const closeLogin = () => { if (!busy) { setLoginOpen(false); setLoginToken(""); setLoginError(""); setTokenVisible(false); } };
   const remoteAction = async (action: "connect" | "disconnect" | "sync") => {
     setBusy(true); setRemoteError(""); setRemoteNotice("");
     try {
       if (action === "connect") { setRemote(await api.connectRemote(remoteUrl.trim(), remoteBranch.trim())); setRemoteNotice(t("git.connected")); }
       else if (action === "disconnect") { await api.disconnectRemote(); setRemote({ branch: remoteBranch }); }
       else { await api.syncRemote(); await load(); onCommitted(); setRemoteNotice(t("git.synced")); }
-    } catch (value) { setRemoteError(String(value)); }
+    } catch (value) {
+      setRemoteError(String(value));
+      const next = await api.remoteSettings().catch(() => remote);
+      setRemote(next);
+      if (remoteUrl.startsWith("https://") && (next.state === "auth_failed" || /authentication|could not read (username|password)|401|403|access denied|repository not found/i.test(String(value)))) openLogin(action === "sync");
+    }
     finally { setBusy(false); }
   };
   const [identity, setIdentity] = useState<GitIdentity>({});
@@ -943,6 +960,29 @@ function GitPage({ onCommitted }: { onCommitted: () => void }) {
     } catch (value) { setError(String(value)); }
     finally { setBusy(false); }
   };
+  const login = async (event: FormEvent) => {
+    event.preventDefault(); setLoginError("");
+    if (!loginUsername.trim() || !loginToken.trim()) { setLoginError(t("git.loginRequired")); return; }
+    if (loginPlatform === "github" && !/^https:\/\/github\.com\//i.test(remoteUrl)) { setLoginError(t("git.tokenHintGithub")); return; }
+    setBusy(true);
+    let verified = false;
+    try {
+      const next = await api.loginRemote(remoteUrl.trim(), remoteBranch.trim(), loginUsername.trim(), loginToken);
+      verified = true; setRemote(next); setLoginOpen(false); setLoginToken(""); setTokenVisible(false); setRemoteError(""); setRemoteNotice(t("git.loginDone"));
+      if (retryAfterLogin) { await api.syncRemote(); await load(); onCommitted(); setRemoteNotice(t("git.synced")); }
+    } catch (value) {
+      if (verified) { setRemoteError(String(value)); setRemote(await api.remoteSettings().catch(() => remote)); }
+      else { setLoginError(String(value)); setRemote(await api.remoteSettings().catch(() => remote)); }
+    } finally { setBusy(false); }
+  };
+  const forgetCredentials = async () => {
+    setBusy(true); setRemoteError("");
+    try { await api.forgetRemoteCredentials(); setRemote(await api.remoteSettings()); setRemoteNotice(t("git.forgotCredential")); }
+    catch (value) { setRemoteError(String(value)); }
+    finally { setBusy(false); }
+  };
+  const remoteStateLabel = remote.state === "synced" ? "git.syncedState" : remote.state === "read_verified" ? "git.connected" : remote.state === "auth_failed" ? "git.authFailed" : remote.state === "network_error" || remote.state === "sync_failed" ? "git.networkError" : "git.unverified";
+  const remoteStateTone = remote.state === "synced" || remote.state === "read_verified" ? "ok" : "warning";
   const logEntries = history ? history.split("\n").map((line) => { const [sha, date, ...subject] = line.split("\t"); return { sha, date, subject: subject.join("\t") }; }) : [];
   return (
     <>
@@ -957,12 +997,26 @@ function GitPage({ onCommitted }: { onCommitted: () => void }) {
         <p>{t("git.authHint")}</p>
         <form noValidate onSubmit={(event) => { event.preventDefault(); void remoteAction("connect"); }}>
           <div className="form-grid"><label className="field"><span>{t("git.remoteUrl")}</span><input value={remoteUrl} disabled={busy || Boolean(remote.url)} placeholder="https://github.com/user/agenthub.git" onChange={(event) => setRemoteUrl(event.target.value)} /></label><label className="field"><span>{t("git.remoteBranch")}</span><input value={remoteBranch} disabled={busy || Boolean(remote.url)} onChange={(event) => setRemoteBranch(event.target.value)} /></label></div>
-          <div className="remote-actions">{remote.url ? <><StatusBadge tone="ok">{t("git.connected")}</StatusBadge><Button type="button" disabled={busy || dirty || !history} onClick={() => void remoteAction("sync")}><RefreshCw size={16} />{t("git.syncNow")}</Button><Button type="button" variant="secondary" disabled={busy} onClick={() => void remoteAction("disconnect")}>{t("git.disconnect")}</Button></> : <Button type="submit" disabled={busy || !remoteUrl.trim() || !remoteBranch.trim()}>{busy ? <RefreshCw className="spin" size={16} /> : <Cloud size={16} />}{t("git.connect")}</Button>}</div>
+          <div className="remote-actions">{remote.url ? <><StatusBadge tone={remoteStateTone}>{t(remoteStateLabel)}</StatusBadge><Button type="button" disabled={busy || dirty || !history} onClick={() => void remoteAction("sync")}><RefreshCw size={16} />{t("git.syncNow")}</Button><Button type="button" variant="secondary" disabled={busy} onClick={() => void remoteAction("disconnect")}>{t("git.disconnect")}</Button></> : <Button type="submit" disabled={busy || !remoteUrl.trim() || !remoteBranch.trim()}>{busy ? <RefreshCw className="spin" size={16} /> : <Cloud size={16} />}{t("git.connect")}</Button>}</div>
         </form>
+        {remoteUrl.trim().startsWith("https://") && <div className="remote-auth-actions"><Button type="button" variant="secondary" disabled={busy || !remoteBranch.trim()} onClick={() => openLogin(remote.state === "auth_failed" && !dirty && Boolean(history))}><KeyRound size={16} />{t(remote.state === "auth_failed" && !dirty && Boolean(history) ? "git.loginRetry" : "git.login")}</Button>{remote.credential_saved && <><span className="remote-credential-label"><ShieldCheck size={15} />{t("git.savedCredential")}</span><Button type="button" variant="secondary" disabled={busy} onClick={() => void forgetCredentials()}>{t("git.forgetCredential")}</Button></>}</div>}
         <p>{t("git.remoteScope")}</p>
         {remoteNotice && <p role="status">{remoteNotice}</p>}
         {remoteError && <div className="inline-error" role="alert"><AlertTriangle size={17} /><div><p>{remoteError}</p><p>{t("git.retryHint")}</p></div></div>}
       </section>
+      <Dialog open={loginOpen} title={t("git.loginTitle")} onClose={closeLogin} dismissible={!busy} actions={<><Button variant="secondary" disabled={busy} onClick={closeLogin}>{t("common.cancel")}</Button><Button type="submit" form="git-login-form" disabled={busy}>{busy ? <RefreshCw className="spin" size={16} /> : <KeyRound size={16} />}{busy ? t("git.signingIn") : retryAfterLogin ? t("git.loginRetry") : t("git.verifyLogin")}</Button></>}>
+        <form id="git-login-form" className="git-login-form" noValidate onSubmit={(event) => void login(event)} aria-busy={busy}>
+          <code className="git-login-repository">{remoteUrl}</code>
+          {retryAfterLogin && <p>{t("git.retryLoginHint")}</p>}
+          {loginError && <div id="git-login-error" className="inline-error" role="alert"><AlertTriangle size={17} /><span>{loginError}</span></div>}
+          <fieldset className="git-login-platform" disabled={busy}><legend>{t("git.platform")}</legend><div><Button variant={loginPlatform === "github" ? "primary" : "secondary"} aria-pressed={loginPlatform === "github"} onClick={() => setLoginPlatform("github")}>GitHub</Button><Button variant={loginPlatform === "git" ? "primary" : "secondary"} aria-pressed={loginPlatform === "git"} onClick={() => setLoginPlatform("git")}>{t("git.selfHosted")}</Button></div></fieldset>
+          <label className="field"><span>{t("git.username")}</span><input data-autofocus autoComplete="username" disabled={busy} value={loginUsername} aria-describedby={loginError ? "git-login-error" : undefined} onChange={(event) => setLoginUsername(event.target.value)} /></label>
+          <label className="field"><span>{t("git.token")}</span><span className="git-token-input"><input type={tokenVisible ? "text" : "password"} autoComplete="off" spellCheck={false} disabled={busy} value={loginToken} onChange={(event) => setLoginToken(event.target.value)} /><Button variant="secondary" disabled={busy} aria-label={t(tokenVisible ? "git.hideToken" : "git.showToken")} aria-pressed={tokenVisible} onClick={() => setTokenVisible((value) => !value)}><Eye size={16} /></Button></span></label>
+          <p>{t(loginPlatform === "github" ? "git.tokenHintGithub" : "git.tokenHintGit")}</p>
+          <Button variant="secondary" disabled={busy} onClick={() => { void api.openTokenSettings(remoteUrl.trim(), loginPlatform).catch((value) => setLoginError(String(value))); }}>{t("git.tokenSettings")}</Button>
+          <p className="git-login-privacy"><ShieldCheck size={17} />{t("git.credentialHint")}</p>
+        </form>
+      </Dialog>
       <form className="material commit-card" noValidate onSubmit={commit}>
         <header><span className="commit-card__icon"><Save size={20} /></span><div><h2>{t("git.commitTitle")}</h2><p>{t("git.commitHint")}</p></div></header>
         {error && <div className="inline-error" role="alert"><Activity size={17} /><span>{error}</span></div>}
@@ -1145,6 +1199,11 @@ function EmptyState({ icon: EmptyIcon, title, body, compact = false }: { icon: I
   );
 }
 
+function ScanWarning({ item }: { item: ScanItem }) {
+  if (!item.warning) return null;
+  return <em>{t(`init.${item.warning}`)}{item.warning_detail && <span className="scan-warning-detail">{item.warning_detail}</span>}</em>;
+}
+
 function ImportSourcePicker({ items, available, selected, source, onSource, onSelected, busy }: { items: ScanItem[]; available: ScanItem[]; selected: Set<string>; source: string; onSource: (source: string) => void; onSelected: Dispatch<SetStateAction<Set<string>>>; busy: boolean }) {
   const sources = ["agents", "cursor", "codex", "claude", ...new Set(items.map((item) => item.source).filter((id) => !["agents", "cursor", "codex", "claude"].includes(id)))];
   const chosen = items.filter((item) => selected.has(item.id));
@@ -1253,7 +1312,7 @@ function Init({ onDone, recoveryPath }: { onDone: (count: number) => void; recov
                   <label className={`${checked ? "is-selected" : ""} ${!item.importable ? "is-disabled" : ""}`} key={item.id}>
                     <input type="checkbox" disabled={busy || !item.importable} checked={checked} onChange={() => setSelected((old) => { const next = new Set(old); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next; })} />
                     <span className="scan-check">{item.importable ? <CheckCircle2 size={17} /> : <AlertTriangle size={15} />}</span>
-                    <span className="scan-copy"><strong title={displayName}>{displayName}</strong><small><b>{item.source}</b><span>{item.path}</span></small>{item.warning && <em>{t(`init.${item.warning}`)}</em>}{duplicate && !item.warning && <em>{t("init.duplicate")}</em>}</span>
+                    <span className="scan-copy"><strong title={displayName}>{displayName}</strong><small><b>{item.source}</b><span>{item.path}</span></small><ScanWarning item={item} />{duplicate && !item.warning && <em>{t("init.duplicate")}</em>}</span>
                     <code>{item.importable ? item.digest.slice(0, 8) : t("init.notImportable")}</code>
                   </label>
                 );

@@ -74,6 +74,49 @@ fn portable_validation_checks_content_and_manifest_identity() {
         .contains("skill review"));
 }
 
+#[test]
+fn git_versions_keep_skill_ignore_files_and_migrate_only_generated_root_rules() {
+    let (_temp, hub) = fixture();
+    let skill = hub.paths.skills.join("portable");
+    fs::create_dir_all(skill.join("state")).unwrap();
+    fs::write(skill.join("SKILL.md"), "# Portable").unwrap();
+    fs::write(skill.join(".gitignore"), "node_modules/\n").unwrap();
+    fs::write(skill.join("state/example.md"), "portable support file").unwrap();
+    fs::write(
+        hub.paths.root.join(".gitignore"),
+        ".gitignore\nstate/\nsecrets/\nbackups/\nprojections/\nruntime/\n*.log\n/custom-local/\n",
+    )
+    .unwrap();
+    hub.paths.ensure_runtime().unwrap();
+    let rules = fs::read_to_string(hub.paths.root.join(".gitignore")).unwrap();
+    assert!(rules.contains("/.gitignore\n/state/\n"));
+    assert!(rules.contains("/custom-local/\n"));
+    git::commit(
+        &hub.paths.root,
+        "Save portable skill",
+        Some("Test"),
+        Some("test@example.com"),
+    )
+    .unwrap();
+    let files = std::process::Command::new("git")
+        .args(["-C"])
+        .arg(&hub.paths.root)
+        .args(["ls-files"])
+        .output()
+        .unwrap();
+    assert!(files.status.success());
+    let tracked = String::from_utf8(files.stdout).unwrap();
+    assert!(tracked
+        .lines()
+        .any(|path| path == "skills/portable/.gitignore"));
+    assert!(tracked
+        .lines()
+        .any(|path| path == "skills/portable/state/example.md"));
+    assert!(tracked
+        .lines()
+        .all(|path| path == "agenthub.toml" || path.starts_with("skills/")));
+}
+
 #[cfg(unix)]
 #[test]
 fn portable_validation_rejects_symlinks_before_sharing() {
@@ -178,6 +221,249 @@ fn shared_agents_skills_can_be_explicitly_cleared() {
     assert!(run.changed);
     assert!(!temp.path().join(".agents/skills/host-only").exists());
     assert!(temp.path().join(".agents/skills").is_dir());
+}
+
+#[test]
+fn skill_import_ignores_runtime_trees_and_keeps_portable_dependencies() {
+    let (temp, hub) = fixture();
+    let source = temp.path().join(".agents/skills/pdf-read");
+    fs::create_dir_all(source.join("scripts")).unwrap();
+    fs::create_dir_all(source.join("references/nested")).unwrap();
+    fs::create_dir_all(source.join(".config")).unwrap();
+    for (path, body) in [
+        ("SKILL.md", "# PDF read"),
+        ("scripts/read_pdf.py", "print('pdf')"),
+        ("pyproject.toml", "[project]\nname = 'pdf-read'"),
+        ("uv.lock", "version = 1"),
+        ("references/nested/SKILL.md", "# Nested instruction"),
+        (".config/portable.json", "{}"),
+    ] {
+        fs::write(source.join(path), body).unwrap();
+    }
+    for name in [
+        ".venv",
+        "venv",
+        "custom-env",
+        "node_modules",
+        ".git",
+        "__pycache__",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+    ] {
+        fs::create_dir_all(source.join(name)).unwrap();
+        fs::write(source.join(name).join("local.dat"), "machine-specific").unwrap();
+    }
+    fs::write(source.join("custom-env/pyvenv.cfg"), "home = /usr/bin").unwrap();
+    fs::write(source.join("scripts/generated.pyc"), [0xff]).unwrap();
+    #[cfg(unix)]
+    {
+        fs::create_dir_all(source.join(".venv/bin")).unwrap();
+        std::os::unix::fs::symlink("/usr/bin/python3", source.join(".venv/bin/python")).unwrap();
+        std::os::unix::fs::symlink("missing", source.join("__pycache__/broken")).unwrap();
+    }
+    let mut items = scanner::scan_global(&hub.paths, &[Target::Agents]).unwrap();
+    assert_eq!(items.len(), 1);
+    assert!(items[0].importable);
+    assert_eq!(items[0].warning.as_deref(), Some("skill_runtime_excluded"));
+    assert!(items[0]
+        .warning_detail
+        .as_deref()
+        .unwrap()
+        .contains(".venv"));
+    let digest = items[0].digest.clone();
+    let scan_id = items[0].id.clone();
+    fs::write(source.join(".venv/local.dat"), "updated environment").unwrap();
+    let rescanned = scanner::scan_global(&hub.paths, &[Target::Agents]).unwrap();
+    assert_eq!(rescanned[0].id, scan_id);
+    items[0].selected = true;
+    canonical::import_initial_atomic(&hub.paths, &items).unwrap();
+    let destination = hub.paths.skills.join("pdf-read");
+    assert_eq!(canonical::tree_digest(&destination).unwrap(), digest);
+    assert_eq!(canonical::validate(&hub.paths).unwrap().len(), 1);
+    for name in [
+        ".venv",
+        "venv",
+        "custom-env",
+        "node_modules",
+        ".git",
+        "__pycache__",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+        "scripts/generated.pyc",
+    ] {
+        assert!(
+            !destination.join(name).exists(),
+            "unexpected runtime path: {name}"
+        );
+    }
+    for path in [
+        "SKILL.md",
+        "scripts/read_pdf.py",
+        "pyproject.toml",
+        "uv.lock",
+        "references/nested/SKILL.md",
+        ".config/portable.json",
+    ] {
+        assert_eq!(
+            fs::read(destination.join(path)).unwrap(),
+            fs::read(source.join(path)).unwrap()
+        );
+    }
+    assert_eq!(
+        fs::read_to_string(source.join(".venv/local.dat")).unwrap(),
+        "updated environment"
+    );
+}
+
+#[test]
+fn skill_preflight_reports_invalid_instructions_before_selection() {
+    let (temp, hub) = fixture();
+    for (name, body) in [
+        ("good", b"# Good".as_slice()),
+        ("empty", b"  "),
+        ("invalid", b"\xff"),
+    ] {
+        let path = temp.path().join(".agents/skills").join(name);
+        fs::create_dir_all(&path).unwrap();
+        fs::write(path.join("SKILL.md"), body).unwrap();
+    }
+    let mut items = scanner::scan_global(&hub.paths, &[Target::Agents]).unwrap();
+    assert_eq!(items.iter().filter(|item| item.importable).count(), 1);
+    for (name, warning) in [
+        ("empty", "skill_empty"),
+        ("invalid", "skill_invalid_encoding"),
+    ] {
+        let item = items.iter().find(|item| item.path.ends_with(name)).unwrap();
+        assert!(!item.importable);
+        assert_eq!(item.warning.as_deref(), Some(warning));
+        assert!(item.warning_detail.as_deref().unwrap().contains("SKILL.md"));
+    }
+    items
+        .iter_mut()
+        .for_each(|item| item.selected = item.importable);
+    assert_eq!(
+        canonical::import_initial_atomic(&hub.paths, &items).unwrap(),
+        ["good"]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn sync_and_rollback_preserve_runtime_links_without_following_them() {
+    let (temp, hub) = fixture();
+    let canonical = hub.paths.skills.join("pdf-read");
+    fs::create_dir_all(&canonical).unwrap();
+    fs::write(canonical.join("SKILL.md"), "# New PDF reader").unwrap();
+    let source = temp.path().join(".agents/skills/pdf-read");
+    fs::create_dir_all(source.join(".venv/bin")).unwrap();
+    fs::create_dir_all(source.join(".venv/empty")).unwrap();
+    fs::write(source.join("SKILL.md"), "# Old PDF reader").unwrap();
+    fs::write(source.join(".venv/pyvenv.cfg"), "home = /usr/bin").unwrap();
+    let outside = temp.path().join("private-outside");
+    fs::create_dir_all(&outside).unwrap();
+    fs::write(outside.join("python"), "private executable").unwrap();
+    for (name, target) in [
+        ("python", outside.join("python")),
+        ("broken", std::path::PathBuf::from("missing")),
+        ("external-dir", outside.clone()),
+    ] {
+        std::os::unix::fs::symlink(target, source.join(".venv/bin").join(name)).unwrap();
+    }
+    let selection = SyncSelection {
+        skills_managed: true,
+        skills: vec!["pdf-read".into()],
+        ..Default::default()
+    };
+    let plan =
+        planner::create_with_selection(&hub.paths, Target::Agents, Some(&selection)).unwrap();
+    let tx = transaction::apply(&hub.paths, &hub.store, &plan).unwrap();
+    assert_eq!(tx.status, "applied");
+    assert!(!source.join(".venv").exists());
+    let saved = tx.backup_path.join("0-skills/pdf-read/.venv/bin");
+    for name in ["python", "broken", "external-dir"] {
+        assert!(fs::symlink_metadata(saved.join(name))
+            .unwrap()
+            .file_type()
+            .is_symlink());
+    }
+    let rollback = transaction::rollback(&hub.paths, &hub.store, &tx.id).unwrap();
+    assert_eq!(rollback.status, "rollback_applied");
+    assert_eq!(
+        fs::read_to_string(source.join("SKILL.md")).unwrap(),
+        "# Old PDF reader"
+    );
+    assert_eq!(
+        fs::read_link(source.join(".venv/bin/python")).unwrap(),
+        outside.join("python")
+    );
+    assert_eq!(
+        fs::read_link(source.join(".venv/bin/broken")).unwrap(),
+        std::path::PathBuf::from("missing")
+    );
+    assert_eq!(
+        fs::read_link(source.join(".venv/bin/external-dir")).unwrap(),
+        outside
+    );
+    assert!(source.join(".venv/empty").is_dir());
+    assert_eq!(
+        fs::read_to_string(outside.join("python")).unwrap(),
+        "private executable"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn skill_cleanup_archives_runtime_links_without_copying_their_targets() {
+    let (temp, hub) = fixture();
+    let source = temp.path().join(".agents/skills/pdf-read");
+    fs::create_dir_all(source.join(".venv/bin")).unwrap();
+    fs::write(source.join("SKILL.md"), "# PDF reader").unwrap();
+    let outside = temp.path().join("private-python");
+    fs::write(&outside, "private executable").unwrap();
+    std::os::unix::fs::symlink(&outside, source.join(".venv/bin/python")).unwrap();
+    let resources = host::inventory(&hub.paths, Target::Agents).unwrap();
+    assert_eq!(resources.len(), 1);
+    assert!(resources[0].deletable);
+    let result = host::cleanup(&hub.paths, Target::Agents, &[resources[0].id.clone()]).unwrap();
+    assert!(!source.exists());
+    let link = result.backup_path.join("path-0/.venv/bin/python");
+    assert!(fs::symlink_metadata(&link)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert_eq!(fs::read_link(link).unwrap(), outside);
+    assert_eq!(fs::read_to_string(outside).unwrap(), "private executable");
+}
+
+#[cfg(unix)]
+#[test]
+fn retained_skill_symlink_is_disabled_and_forged_import_remains_atomic() {
+    let (temp, hub) = fixture();
+    let source = temp.path().join(".agents/skills/unsafe");
+    fs::create_dir_all(source.join("scripts")).unwrap();
+    fs::write(source.join("SKILL.md"), "# Unsafe").unwrap();
+    let outside = temp.path().join("outside.py");
+    fs::write(&outside, "private source").unwrap();
+    std::os::unix::fs::symlink(&outside, source.join("scripts/external.py")).unwrap();
+    let mut items = scanner::scan_global(&hub.paths, &[Target::Agents]).unwrap();
+    assert!(!items[0].importable);
+    assert_eq!(items[0].warning.as_deref(), Some("skill_symlink"));
+    assert!(items[0]
+        .warning_detail
+        .as_deref()
+        .unwrap()
+        .contains("scripts/external.py"));
+    items[0].selected = true;
+    items[0].importable = true;
+    let error = canonical::import_initial_atomic(&hub.paths, &items).unwrap_err();
+    let chain = format!("{error:#}");
+    assert!(chain.contains("import skill from"));
+    assert!(chain.contains("nonportable symlink: scripts/external.py"));
+    assert!(!chain.contains("private source"));
+    assert!(canonical::canonical_dirs_empty(&hub.paths).unwrap());
+    assert_eq!(fs::read_to_string(outside).unwrap(), "private source");
 }
 
 #[test]
@@ -620,6 +906,7 @@ fn plugin_import_rejects_unknown_components_and_traversal() {
         importable: true,
         source_key: None,
         warning: None,
+        warning_detail: None,
     };
     fs::write(
         plugin.join("plugin.json"),

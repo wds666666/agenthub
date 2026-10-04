@@ -7,7 +7,7 @@ export type TransactionMode = "reviewed" | "auto_sync" | "default_sync" | "rollb
 export interface Transaction { id: string; plan_id: string; target: Target; status: string; mode: TransactionMode; backup_path: string; verification?: string; created_at: string }
 export interface SyncRunResult { changed: boolean; plan: Plan; transaction?: Transaction }
 export interface Dashboard { initialized: boolean; inventory: Record<string, number>; enabled_targets: Target[]; auto_sync_targets: Target[]; dirty: boolean; recent_transactions: Transaction[] }
-export interface ScanItem { id: string; kind: Kind; source: string; path: string; digest: string; selected: boolean; importable: boolean; source_key?: string; warning?: string }
+export interface ScanItem { id: string; kind: Kind; source: string; path: string; digest: string; selected: boolean; importable: boolean; source_key?: string; warning?: string; warning_detail?: string }
 export type HostRelation = "canonical_match" | "host_only" | "constraint";
 export interface HostResource { id: string; target: Target; kind: Kind; display_name: string; path: string; digest: string; relation: HostRelation; canonical_id?: string; deletable: boolean; constraint?: string }
 export interface HostCleanupResult { id: string; deleted: string[]; backup_path: string }
@@ -26,7 +26,7 @@ export interface ScanImportResult { imported: string[]; skipped_duplicates: numb
 export interface PolicySettings { strict_authoritative: boolean; sync_after_reverse_import: boolean }
 export interface Plan { id: string; target: Target; steps: PlanStep[]; summary: PlanCapabilitySummary[]; selection?: SyncSelection; warnings: string[]; canonical_digest: string; git: { head?: string; dirty: boolean } }
 export interface RuleDocument { schemaVersion: number; id: string; displayName: string; activation: "always" | "manual" | "paths"; paths: string[]; targets: Target[]; body: string }
-export interface RemoteSettings { url?: string; branch: string }
+export interface RemoteSettings { url?: string; branch: string; state?: "disconnected" | "unverified" | "read_verified" | "synced" | "auth_failed" | "network_error" | "sync_failed"; credential_saved?: boolean }
 export interface CommitResult { local_saved: boolean; remote_synced: boolean; remote_error?: string }
 export interface GitIdentity { name?: string; email?: string }
 const isTauri = () => "__TAURI_INTERNALS__" in window;
@@ -60,6 +60,9 @@ export const api = {
   resetAgenthub: (confirmation: string) => call<string>("reset_agenthub", { confirmation }),
   remoteSettings: () => call<RemoteSettings>("remote_settings"),
   connectRemote: (url: string, branch: string) => call<RemoteSettings>("connect_remote", { url, branch }),
+  loginRemote: (url: string, branch: string, username: string, token: string) => call<RemoteSettings>("login_remote", { url, branch, username, token }),
+  forgetRemoteCredentials: () => call<void>("forget_remote_credentials"),
+  openTokenSettings: (url: string, platform: "github" | "git") => call<void>("open_token_settings", { url, platform }),
   disconnectRemote: () => call<void>("disconnect_remote"),
   syncRemote: () => call<void>("sync_remote"),
   gitStatus: () => call<string>("git_status"),

@@ -406,28 +406,48 @@ fn verify_manifest(root: &Path, manifest: &BackupManifest) -> Result<()> {
 }
 
 fn paths_equal(left: &Path, right: &Path) -> Result<bool> {
+    let left_type = fs::symlink_metadata(left)?.file_type();
+    let right_type = fs::symlink_metadata(right)?.file_type();
+    if left_type.is_symlink() || right_type.is_symlink() {
+        return Ok(left_type.is_symlink()
+            && right_type.is_symlink()
+            && fs::read_link(left)? == fs::read_link(right)?);
+    }
     if left.is_file() || right.is_file() {
         return Ok(left.is_file() && right.is_file() && fs::read(left)? == fs::read(right)?);
     }
-    let collect = |root: &Path| -> Result<Vec<(PathBuf, Vec<u8>)>> {
+    #[derive(PartialEq)]
+    enum Node {
+        Directory,
+        File(Vec<u8>),
+        Link(PathBuf),
+    }
+    let collect = |root: &Path| -> Result<Vec<(PathBuf, Node)>> {
         let mut files = Vec::new();
         for entry in WalkDir::new(root).follow_links(false) {
             let entry = entry?;
-            if entry.file_type().is_symlink() {
-                return Ok(Vec::new());
-            }
-            if entry.file_type().is_file() {
-                files.push((
-                    entry.path().strip_prefix(root)?.to_path_buf(),
-                    fs::read(entry.path())?,
-                ));
-            }
+            let node = if entry.file_type().is_symlink() {
+                Node::Link(fs::read_link(entry.path())?)
+            } else if entry.file_type().is_file() {
+                Node::File(fs::read(entry.path())?)
+            } else if entry.file_type().is_dir() {
+                Node::Directory
+            } else {
+                anyhow::bail!("unsupported backup file type: {}", entry.path().display());
+            };
+            files.push((entry.path().strip_prefix(root)?.to_path_buf(), node));
         }
+        files.sort_by(|left, right| left.0.cmp(&right.0));
         Ok(files)
     };
     Ok(collect(left)? == collect(right)?)
 }
 fn copy_path(src: &Path, dst: &Path) -> Result<()> {
+    anyhow::ensure!(
+        !fs::symlink_metadata(src)?.file_type().is_symlink(),
+        "backup root must not be a symlink: {}",
+        src.display()
+    );
     if src.is_file() {
         if let Some(p) = dst.parent() {
             fs::create_dir_all(p)?;
@@ -445,10 +465,7 @@ fn copy_path(src: &Path, dst: &Path) -> Result<()> {
         }
         let target = dst.join(rel);
         if e.file_type().is_symlink() {
-            anyhow::bail!(
-                "refusing to back up escaping or unresolved symlink: {}",
-                e.path().display()
-            )
+            crate::backup::copy_link(e.path(), &target)?;
         } else if e.file_type().is_dir() {
             fs::create_dir_all(target)?
         } else if e.file_type().is_file() {
@@ -457,6 +474,8 @@ fn copy_path(src: &Path, dst: &Path) -> Result<()> {
             }
             fs::copy(e.path(), &target)?;
             set_private_file(&target)?;
+        } else {
+            anyhow::bail!("unsupported backup file type: {}", e.path().display());
         }
     }
     Ok(())

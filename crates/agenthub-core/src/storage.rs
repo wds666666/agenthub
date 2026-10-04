@@ -170,4 +170,9 @@ impl Store {
             )
             .optional()?)
     }
+    pub fn delete_secret(&self, name: &str) -> Result<()> {
+        self.conn()
+            .execute("DELETE FROM secrets WHERE name=?1", [name])?;
+        Ok(())
+    }
 }

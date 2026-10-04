@@ -37,6 +37,8 @@ CLI `plan <target> --selection <json-file> --json` accepts the same selection, r
 
 Before writing, the executor resolves all paths and records type, mode, hash and symlink target. It then creates a complete transaction backup, writes the projection, reads the target again and compares it with Expected State. Verification failure automatically restores the backup. Cleanup is manual and warns that rollback ability will be lost.
 
+On Unix, nested host symlinks are retained in local recovery copies without following their targets, so an installed `.venv` does not prevent sync or cleanup. Rollback compares link metadata as well as regular files and empty directories. Backup roots remain ordinary paths; Canonical import and projection still reject retained symlinks. Platforms without this recovery implementation refuse symlink-containing backups before any host write.
+
 A verified Apply atomically records the applied transaction and marks that target enabled with its last-sync timestamp. Dashboard target state must never diverge from a successful Apply. Existing databases migrate historical applied transactions only when no explicit target row exists, preserving a later explicit disable.
 
 ## Manual rollback
@@ -68,3 +70,7 @@ Cleanup never changes Canonical. Failure restores the pre-cleanup backup automat
 ## Remote version synchronization
 A user explicitly connects a dedicated AgentHub repository and branch. Each version save automatically synchronizes when connected; a manual sync retries failed uploads and receives changes on other devices without polling. Fetch and merge preserve both histories; conflicts abort the merge and preserve the local commit. Remote trees must contain only Canonical domains, agenthub.toml and an optional .gitignore, with no symlinks or submodules. Validate merged Canonical before committing. Push never forces; a concurrent remote update triggers one bounded fetch/merge retry. Dirty trees block manual sync. Connection tests authenticate read access before storing configuration; write access is verified at first push.
 Host Resources also offers a quick-clean action for every adapter-confirmed deletable resource on the current target, including Canonical matches. It uses the same exact review, acknowledgement, rescan, backup and rollback flow. Protected vendor stores remain visible and excluded.
+
+## Repository authentication and state
+
+GitHub and self-hosted Git/Gitea support HTTPS username/access-token sign-in. Login verifies reading without uploading; an actual push establishes upload permission. UI states distinguish configured but unverified, last read verification, last successful sync, failed authentication and incomplete sync. A stored URL alone is not successful authentication. Only an explicit sign-in-and-retry action retries the failed upload after login, and local commits remain saved. Forgetting credentials preserves repository configuration, library content and versions.

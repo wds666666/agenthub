@@ -27,4 +27,5 @@ toml = "0.8"
 toml_edit = "0.22"
 uuid = { version = "1.11", features = ["v4", "serde"] }
 walkdir = "2.5"
+url = "=2.5.8"
 

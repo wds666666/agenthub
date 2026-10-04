@@ -37,17 +37,62 @@ pub fn available() -> bool {
 }
 
 fn run(root: &Path, args: &[&str]) -> Result<String> {
-    let mut child = command("git")
-        .args([
+    let network_url = if matches!(args.first(), Some(&"ls-remote" | &"fetch" | &"push")) {
+        args.iter().find(|arg| {
+            arg.starts_with("https://") || arg.starts_with("ssh://") || arg.starts_with("git@")
+        })
+    } else {
+        None
+    };
+    let credential = network_url
+        .filter(|url| url.starts_with("https://"))
+        .map(|url| crate::git_auth::for_url(root, url))
+        .transpose()?
+        .flatten();
+    let mut process = command("git");
+    process.args([
+        "-c",
+        "core.hooksPath=",
+        "-c",
+        "core.quotepath=false",
+        "-c",
+        "commit.gpgSign=false",
+        "-c",
+        "credential.interactive=false",
+    ]);
+    if network_url.is_some() {
+        process.args([
             "-c",
-            "core.hooksPath=",
+            "http.followRedirects=false",
             "-c",
-            "core.quotepath=false",
-            "-c",
-            "commit.gpgSign=false",
-            "-c",
-            "credential.interactive=false",
-        ])
+            "credential.useHttpPath=true",
+        ]);
+        for name in [
+            "GIT_TRACE",
+            "GIT_TRACE_PACKET",
+            "GIT_TRACE_CURL",
+            "GIT_CURL_VERBOSE",
+            "GIT_TRACE_CURL_NO_DATA",
+            "GIT_TRACE2",
+            "GIT_TRACE2_EVENT",
+            "GIT_TRACE2_PERF",
+        ] {
+            process.env_remove(name);
+        }
+    }
+    if let Some(saved) = &credential {
+        process
+            .args([
+                "-c",
+                "credential.helper=",
+                "-c",
+                &crate::git_auth::helper_configuration()?,
+                "-c",
+                &format!("credential.username={}", saved.username),
+            ])
+            .env("AGENTHUB_GIT_ROOT", root);
+    }
+    let mut child = process
         .arg("-C")
         .arg(root)
         .args(args)
@@ -76,6 +121,9 @@ fn run(root: &Path, args: &[&str]) -> Result<String> {
         if started.elapsed() > Duration::from_secs(45) {
             let _ = child.kill();
             let _ = child.wait();
+            if let Some(url) = network_url {
+                mark_network_failure(root, url, "network_error");
+            }
             anyhow::bail!(
                 "Git operation timed out; check network and saved credentials, then retry"
             );
@@ -88,12 +136,42 @@ fn run(root: &Path, args: &[&str]) -> Result<String> {
     let stderr = errors
         .recv_timeout(Duration::from_secs(45).saturating_sub(started.elapsed()))
         .context("Git error output timed out; check credential helper and retry")??;
-    anyhow::ensure!(
-        status.success(),
-        "git failed: {}",
-        String::from_utf8_lossy(&stderr)
-    );
-    Ok(String::from_utf8_lossy(&stdout).trim().to_string())
+    let error = crate::git_auth::sanitize(&String::from_utf8_lossy(&stderr), credential.as_ref());
+    if !status.success() {
+        if let Some(url) = network_url {
+            let lower = error.to_ascii_lowercase();
+            let state = if [
+                "authentication failed",
+                "could not read username",
+                "could not read password",
+                "401",
+                "403",
+                "access denied",
+                "permission denied",
+                "invalid username",
+                "repository not found",
+            ]
+            .iter()
+            .any(|s| lower.contains(s))
+            {
+                "auth_failed"
+            } else {
+                "network_error"
+            };
+            mark_network_failure(root, url, state);
+        }
+        anyhow::bail!("git failed: {error}");
+    }
+    Ok(
+        crate::git_auth::sanitize(&String::from_utf8_lossy(&stdout), credential.as_ref())
+            .trim()
+            .to_string(),
+    )
+}
+fn mark_network_failure(root: &Path, url: &str, state: &str) {
+    let branch =
+        run(root, &["config", "--get", "agenthub.remoteBranch"]).unwrap_or_else(|_| "main".into());
+    let _ = crate::git_auth::remember_state(root, url, &branch, state);
 }
 pub fn ensure_repo(root: &Path) -> Result<()> {
     if !root.join(".git").exists() {
@@ -202,6 +280,8 @@ pub fn restore(root: &Path, commit: &str, capability: Option<&str>) -> Result<()
 pub struct RemoteSettings {
     pub url: Option<String>,
     pub branch: String,
+    pub state: String,
+    pub credential_saved: bool,
 }
 #[derive(Debug, serde::Serialize)]
 pub struct CommitResult {
@@ -212,10 +292,25 @@ pub struct CommitResult {
 
 pub fn remote_settings(root: &Path) -> Result<RemoteSettings> {
     ensure_repo(root)?;
+    let url = run(root, &["config", "--get", "remote.agenthub.url"]).ok();
+    let branch =
+        run(root, &["config", "--get", "agenthub.remoteBranch"]).unwrap_or_else(|_| "main".into());
+    let state = match &url {
+        Some(url) => crate::git_auth::state(root, url, &branch)?,
+        None => "disconnected".into(),
+    };
+    let credential_saved = url
+        .as_ref()
+        .filter(|url| url.starts_with("https://"))
+        .map(|url| crate::git_auth::for_url(root, url))
+        .transpose()?
+        .flatten()
+        .is_some();
     Ok(RemoteSettings {
-        url: run(root, &["config", "--get", "remote.agenthub.url"]).ok(),
-        branch: run(root, &["config", "--get", "agenthub.remoteBranch"])
-            .unwrap_or_else(|_| "main".into()),
+        url,
+        branch,
+        state,
+        credential_saved,
     })
 }
 
@@ -230,6 +325,7 @@ pub fn connect_remote(root: &Path, url: &str, branch: &str) -> Result<RemoteSett
     )?;
     run(root, &["config", "remote.agenthub.url", url])?;
     run(root, &["config", "agenthub.remoteBranch", branch])?;
+    crate::git_auth::remember_state(root, url, branch, "read_verified")?;
     remote_settings(root)
 }
 fn validate_remote(url: &str) -> Result<()> {
@@ -249,6 +345,7 @@ fn validate_remote(url: &str) -> Result<()> {
             !rest.split('/').next().unwrap_or("").contains('@'),
             "do not put credentials in repository addresses"
         );
+        crate::git_auth::https_url(url)?;
     }
     if let Some(rest) = ssh {
         let authority = rest.split('/').next().unwrap_or("");
@@ -262,6 +359,12 @@ fn validate_remote(url: &str) -> Result<()> {
 pub fn disconnect_remote(root: &Path) -> Result<()> {
     if remote_settings(root)?.url.is_some() {
         run(root, &["config", "--remove-section", "remote.agenthub"])?;
+    }
+    if crate::paths::AgentHubPaths::new(root.to_path_buf(), root.to_path_buf())
+        .database
+        .exists()
+    {
+        crate::git_auth::forget(root)?;
     }
     Ok(())
 }
@@ -419,15 +522,48 @@ fn check_upload_history(root: &Path) -> Result<()> {
             continue;
         }
         let content = run(root, &["cat-file", "blob", object])?;
-        let value: serde_json::Value = serde_json::from_str(&content).with_context(|| {
-            format!("remote upload blocked: cannot inspect configuration at {path}")
-        })?;
+        let value: serde_json::Value = match serde_json::from_str(&content) {
+            Ok(value) => value,
+            // Some Skill references preserve an old .json path as Markdown documentation.
+            // No JSON objects may be concealed in that compatibility document.
+            Err(_)
+                if path.starts_with("skills/")
+                    && content.starts_with("# ")
+                    && !content.contains(['{', '}']) =>
+            {
+                continue;
+            }
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("remote upload blocked: cannot inspect configuration at {path}")
+                });
+            }
+        };
         anyhow::ensure!(!has_plaintext_credentials(&value), "remote upload blocked: plaintext credentials in version history at {path}; replace with environment placeholders and remove sensitive historical versions before sharing");
     }
     Ok(())
 }
 
 pub fn sync_remote(root: &Path) -> Result<()> {
+    let result = sync_remote_inner(root);
+    if result.is_err() {
+        if let Ok(settings) = remote_settings(root) {
+            if let Some(url) = settings.url {
+                if settings.state != "auth_failed" && settings.state != "network_error" {
+                    let _ = crate::git_auth::remember_state(
+                        root,
+                        &url,
+                        &settings.branch,
+                        "sync_failed",
+                    );
+                }
+            }
+        }
+    }
+    result
+}
+
+fn sync_remote_inner(root: &Path) -> Result<()> {
     let settings = remote_settings(root)?;
     let url = settings.url.context("connect a repository first")?;
     validate_remote(&url)?;
@@ -456,6 +592,7 @@ pub fn sync_remote(root: &Path) -> Result<()> {
             return Err(first);
         }
     }
+    crate::git_auth::remember_state(root, &url, &settings.branch, "synced")?;
     Ok(())
 }
 pub fn commit_and_sync(
@@ -470,11 +607,13 @@ pub fn commit_and_sync(
         remote_synced: false,
         remote_error: None,
     };
-    if remote_settings(root)?.url.is_some() {
-        match sync_remote(root) {
+    match remote_settings(root) {
+        Ok(settings) if settings.url.is_some() => match sync_remote(root) {
             Ok(()) => result.remote_synced = true,
             Err(error) => result.remote_error = Some(crate::secrets::redact(&error.to_string())),
-        }
+        },
+        Err(error) => result.remote_error = Some(crate::secrets::redact(&error.to_string())),
+        _ => {}
     }
     Ok(result)
 }
@@ -505,6 +644,32 @@ mod tests {
             format!("---\nname: {id}\ndescription: Test\n---\n{body}"),
         )
         .unwrap();
+    }
+    #[test]
+    fn unreadable_saved_credentials_do_not_hide_a_successful_local_commit() {
+        let home = TempDir::new().unwrap();
+        let hub = device(home.path());
+        let url = "https://git.example/team/library.git";
+        run(&hub.paths.root, &["config", "remote.agenthub.url", url]).unwrap();
+        let credential = crate::git_auth::Credential {
+            url: url.into(),
+            username: "test".into(),
+            token: "fixture-only".into(),
+        };
+        crate::secrets::set(
+            &hub.store,
+            &hub.paths,
+            "agenthub.git.https",
+            &serde_json::to_vec(&credential).unwrap(),
+        )
+        .unwrap();
+        fs::remove_file(&hub.paths.master_key).unwrap();
+        skill(&hub, "new-skill", "Local content");
+        let result = commit_and_sync(&hub.paths.root, "Saved locally", None, None).unwrap();
+        assert!(result.local_saved);
+        assert!(!result.remote_synced);
+        assert!(result.remote_error.is_some());
+        assert!(!snapshot(&hub.paths.root).unwrap().dirty);
     }
     fn local_remote(root: &Path, remote: &Path) {
         // File transport is strictly a test fixture; public connection rejects it.
@@ -625,6 +790,45 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("skill broken"));
+    }
+    #[test]
+    fn markdown_reference_compatibility_does_not_bypass_json_credential_checks() {
+        for (path, body, allowed) in [
+            (
+                "skills/alpha/reference.json",
+                "# Compatibility entry\nSee [new index](xml/index.json).\n",
+                true,
+            ),
+            ("skills/alpha/reference.json", "not JSON", false),
+            (
+                "skills/alpha/reference.json",
+                "# Reference\n{\"token\":\"private-value\"}",
+                false,
+            ),
+            (
+                "skills/alpha/reference.json",
+                "{\"token\":\"private-value\"}",
+                false,
+            ),
+            (
+                "mcp/reference.json",
+                "# Compatibility entry\nSee index.json.\n",
+                false,
+            ),
+        ] {
+            let temp = TempDir::new().unwrap();
+            let hub = device(temp.path());
+            let resource = hub.paths.root.join(path);
+            fs::create_dir_all(resource.parent().unwrap()).unwrap();
+            fs::write(resource, body).unwrap();
+            run(&hub.paths.root, &["add", path]).unwrap();
+            run(&hub.paths.root, &["commit", "-m", "Reference fixture"]).unwrap();
+            let result = check_upload_history(&hub.paths.root);
+            assert_eq!(result.is_ok(), allowed, "unexpected result for {path}");
+            if let Err(error) = result {
+                assert!(!format!("{error:#}").contains("private-value"));
+            }
+        }
     }
     #[test]
     fn remote_validation_rejects_credentials_options_and_local_paths() {

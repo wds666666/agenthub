@@ -59,3 +59,5 @@ Use `agenthub history --json` and `agenthub rollback <transaction-id>` for host 
 Desktop Reset AgentHub requires typing `AGENTHUB`; it moves the complete old root into a private sibling recovery directory and restarts initialization. It preserves host resources. A reset archive includes keys and local versions; report its path and do not delete it without user instruction.
 
 Never print secrets or include them in chat, logs, diffs, or examples. Recognizable JSON credentials block remote upload; this does not guarantee arbitrary Markdown or plugin assets are secret-free.
+
+HTTPS sign-in is available in the desktop for GitHub and self-hosted Git/Gitea; its encrypted credentials are shared with CLI. Do not ask the user to provide access tokens in chat or command arguments. `git login <URL> --username <name> --branch <branch>` reads a token only from stdin for direct user-controlled setup. Login verifies reading, not write permission. Inspect `remote-status` verification state, not merely the presence of a URL.

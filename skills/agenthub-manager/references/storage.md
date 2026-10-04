@@ -21,11 +21,11 @@ Current MCP env/headers can contain strings. Prefer environment placeholders suc
 - `agenthub git sync`
 - `agenthub git disconnect`
 
-Desktop **Versions** presents connection and retry state. Connect tests read access. Author name/email identify a commit; they do not sign into a remote provider. Use existing system Git credentials or SSH agent; AgentHub stores no login token and disables interactive prompts and Windows console windows. Prepare credentials outside AgentHub if authentication fails.
+Desktop **Versions** presents connection and retry state. Connect tests read access. Author name/email identify a commit; they do not sign into a remote provider. Use the desktop sign-in dialog for GitHub or self-hosted Git/Gitea; encrypted local tokens are shared with CLI and never versioned. Existing system Git credentials and SSH remain available. Interactive prompts and Windows console windows stay disabled. Read verification does not prove push permission. A configured URL without verification is not an authenticated connection.
 
 A saved version commits locally, fetches and merges remote changes, then pushes. Sync requires a clean library working tree and never force-pushes. A concurrent remote update gets one additional reconciliation attempt. Conflicts abort the merge and preserve the local version for manual resolution; do not choose one device's content silently. Local commit success remains success even if remote upload fails: report the remote error and retry with Sync remote after correction.
 
-Read [conflict resolution](conflicts.md) for an Agent-assisted merge using exact fetched versions, file validation and the normal guarded sync. Read [backup migration](migration.md) before adopting an existing backup repository; unrelated content in old history may block it. Application authentication, automatic timers and semantic conflict resolution are not supplied by this skill.
+Read [conflict resolution](conflicts.md) for an Agent-assisted merge using exact fetched versions, file validation and the normal guarded sync. Read [backup migration](migration.md) before adopting an existing backup repository; unrelated content in old history may block it. The skill does not handle secret entry, automatic timers or semantic conflict decisions. Users enter access tokens directly in the desktop; conflict decisions still require the user’s intended content.
 
 No polling or automatic host writes occur on remote reception. On another device, initialize/save its local library, connect the same dedicated repository/branch, synchronize, then review a host Plan before applying. Resource content and Git history are portable; each device chooses its own hosts and scope.
 
