@@ -27,8 +27,8 @@ def check(release_tag=None, publish=False):
         if len(entries) != 1 or entries[0]["version"] != version:
             raise ValueError(f"Cargo.lock version mismatch: {name}")
     tag = release_tag or f"v{version}"
-    if tag != f"v{version}":
-        raise ValueError("Release tag must match the existing package version")
+    if not re.fullmatch(rf"v{re.escape(version)}(?:-patch\.[1-9][0-9]*)?", tag):
+        raise ValueError("Release tag must match the current version, optionally with -patch.N")
     if publish:
         notes = ROOT / "docs/releases" / f"{tag}.md"
         if not notes.is_file() or not notes.read_text().strip():

@@ -1,10 +1,12 @@
 name: Build packages
 
 on:
+  push:
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       platform:
-        description: "Target platform (uses the current version; never publishes)"
+        description: "Rebuild a tested version tag only; never publishes"
         required: true
         type: choice
         options: [all, windows, linux]
@@ -27,11 +29,17 @@ jobs:
       - uses: actions/checkout@v7
       - name: Check project
         id: metadata
-        run: python3 scripts/check_project.py --github-output
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          [[ "$REF_TYPE" == "tag" ]] || { echo 'Package builds require a locally tested version tag.'; exit 1; }
+          python3 scripts/check_project.py --release-tag "$RELEASE_TAG" --github-output
 
   linux-x64:
     needs: prepare
-    if: ${{ inputs.platform == 'all' || inputs.platform == 'linux' }}
+    if: ${{ github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'linux' }}
     env:
       PACKAGE_VERSION: ${{ needs.prepare.outputs.version }}
     name: Ubuntu x64 (deb + CLI)
@@ -45,7 +53,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential libwebkit2gtk-4.1-dev libxdo-dev \
-            libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf file
+            libssl-dev openssl libayatana-appindicator3-dev librsvg2-dev patchelf file
 
       - name: Install pnpm
         uses: pnpm/action-setup@v6
@@ -87,8 +95,11 @@ jobs:
 
       - name: Verify
         run: |
+          set -euo pipefail
           pnpm lint
           pnpm test
+          pnpm exec playwright install --with-deps chromium webkit
+          pnpm test:e2e
           cargo fmt --all -- --check
           cargo clippy -p agenthub-core -p agenthub-cli --all-targets -- -D warnings
           cargo test -p agenthub-core -p agenthub-cli
@@ -101,6 +112,7 @@ jobs:
           # FUSE is blocked, and its bundled strip rejects modern glibc). Publish
           # the .deb plus the raw executables instead of failing the release there.
           cargo tauri build --bundles deb
+          python3 scripts/test_git_auth.py target/release/agenthub target/release/agenthub-desktop
 
       - name: Collect Linux artifacts
         run: |
@@ -133,7 +145,7 @@ jobs:
 
   windows-x64:
     needs: prepare
-    if: ${{ inputs.platform == 'all' || inputs.platform == 'windows' }}
+    if: ${{ github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'windows' }}
     env:
       PACKAGE_VERSION: ${{ needs.prepare.outputs.version }}
     name: Windows x64 (installers + complete portable ZIP)

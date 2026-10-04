@@ -11,7 +11,7 @@ Manage user-global capabilities for Cursor, Codex and Claude Code. Keep versions
 - Review synchronization changes, back up writes, verify results and recover previous tool state.
 - Save and synchronize library versions through Git. Backups, keys and device settings stay local.
 
-**Plugin support is incomplete.** Official Codex and Claude Code plugin caches are currently displayed only; complete import and synchronization are unavailable. See the [release notes](releases/v0.1.3.md) for the current scope.
+**Plugin support is incomplete.** Official Codex and Claude Code plugin caches are currently displayed only; complete import and synchronization are unavailable. See the [release notes](releases/v0.1.4-patch.1.md) for the current scope.
 
 ## Download and use
 
@@ -39,3 +39,5 @@ pnpm tauri dev
 Read the [migration guide](../skills/agenthub-manager/references/migration.md) before replacing an existing backup workflow. Copy the supplied management skill into your tool's user-level Skills directory. It covers command discovery, formats, selected previews and Git conflict resolution, and identifies operations that still require the Desktop.
 
 The existing version is retained unless a new version is explicitly requested. Publishing requires explicit approval for each release.
+
+GitHub and self-hosted Git/Gitea support access-token sign-in in the app; encrypted credentials stay local and are shared with CLI. Cloud packages are built from locally tested version tags only. Ordinary pushes run lightweight checks; release publication requires explicit approval and reuses successful build artifacts.

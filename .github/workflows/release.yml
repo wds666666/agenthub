@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       tag:
-        description: "Optional: defaults to the existing package version; never increments it"
+        description: "Optional: defaults to the selected version tag; never increments the package version"
         required: false
         type: string
       approved:
@@ -41,7 +41,7 @@ jobs:
       - name: Validate package and release notes
         id: metadata
         env:
-          REQUESTED_TAG: ${{ inputs.tag }}
+          REQUESTED_TAG: ${{ inputs.tag || (github.ref_type == 'tag' && github.ref_name) || '' }}
         run: python3 scripts/check_project.py --release-tag "$REQUESTED_TAG" --publish --github-output
       - name: Verify source build
         env:
@@ -111,6 +111,6 @@ jobs:
             gh api --method PATCH "repos/${GH_REPO}/git/refs/tags/${RELEASE_TAG}" \
               -f sha="$GITHUB_SHA" -F force=true > /dev/null
           fi
-          gh release create "$RELEASE_TAG" release-assets/* \
+          gh release create "$RELEASE_TAG" release-assets/* --latest \
             --target "$GITHUB_SHA" --title "AgentHub $RELEASE_TAG" \
             --notes-file "docs/releases/${RELEASE_TAG}.md"
