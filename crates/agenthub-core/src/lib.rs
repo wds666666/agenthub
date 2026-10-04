@@ -1,5 +1,6 @@
 pub mod adapters;
 mod backup;
+pub mod bootstrap;
 pub mod canonical;
 pub mod git;
 pub mod git_auth;
@@ -10,6 +11,7 @@ pub mod planner;
 pub mod reset;
 pub mod scanner;
 pub mod secrets;
+pub mod skill_changes;
 mod skill_content;
 pub mod storage;
 pub mod transaction;
@@ -25,9 +27,19 @@ pub struct AgentHub {
 
 impl AgentHub {
     pub fn open(paths: AgentHubPaths) -> Result<Self> {
+        bootstrap::recover_pending(&paths)?;
         paths.ensure_runtime()?;
         let store = Store::open(&paths.database)?;
         paths::set_private_file(&paths.database)?;
+        if !store.initialized()? {
+            let has_content = !canonical::canonical_dirs_empty(&paths)?;
+            let has_versions =
+                paths.root.join(".git").exists() && git::snapshot(&paths.root)?.head.is_some();
+            if has_content || has_versions {
+                canonical::validate(&paths)?;
+                store.set_initialized(true)?;
+            }
+        }
         Ok(Self { paths, store })
     }
 

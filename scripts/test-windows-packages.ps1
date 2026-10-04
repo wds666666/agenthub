@@ -66,14 +66,35 @@ try {
         New-Item -ItemType Directory -Force -Path $directory | Out-Null
         Copy-Item target/release/agenthub.exe $directory
     }
+    # Exact package-owned stale files are cleaned; modified and user files survive.
+    $resources = Join-Path $first "skills/agenthub-manager/references"
+    New-Item -ItemType Directory -Force -Path $resources | Out-Null
+    $stale = Join-Path $resources "retired.md"
+    $edited = Join-Path $resources "edited.md"
+    $userFile = Join-Path $resources "my-notes.md"
+    Set-Content -LiteralPath $stale "old program resource"
+    Copy-Item $stale $edited
+    $oldHash = (Get-FileHash -LiteralPath $stale -Algorithm SHA256).Hash
+    Set-Content -LiteralPath $edited "user-edited content"
+    Set-Content -LiteralPath $userFile "user data"
+    $fixtureManifest = @{ product = "AgentHub"; schemaVersion = 1; files = @(); legacy = @(
+        @{ path = "skills/agenthub-manager/references/retired.md"; sha256 = $oldHash },
+        @{ path = "skills/agenthub-manager/references/edited.md"; sha256 = $oldHash },
+        @{ path = "skills/agenthub-manager/../../agenthub.exe"; sha256 = $oldHash }
+    ) }
+    $fixtureManifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $first "windows-resources.json") -Encoding UTF8
     & ./scripts/windows-cli.ps1 -Action Install -InstallDirectory $first
     & ./scripts/windows-cli.ps1 -Action Install -InstallDirectory $first
+    Assert (-not (Test-Path -LiteralPath $stale)) "Owned stale resource was not cleaned"
+    Assert ((Test-Path -LiteralPath $edited) -and (Test-Path -LiteralPath $userFile)) "Reinstall deleted modified or unknown user files"
+    Assert (Test-Path -LiteralPath (Join-Path $first "agenthub.exe")) "Resource cleanup escaped its owned subtree"
     Assert ((Count-Entry $first) -eq 1 -and (User-Path).StartsWith($baseline)) "PATH duplication or truncation"
     Assert ($environmentKey.GetValueKind("Path") -eq [Microsoft.Win32.RegistryValueKind]::ExpandString) "PATH representation changed"
     Check-StaleEnvironment (Join-Path $first "agenthub.exe")
     Write-Host "Registry ownership, long PATH and Skill discovery passed."
     & ./scripts/windows-cli.ps1 -Action Install -InstallDirectory $second
     & ./scripts/windows-cli.ps1 -Action Uninstall -InstallDirectory $first
+    Assert (-not (Test-Path -LiteralPath (Join-Path $first ".agenthub-installed-files.json"))) "Retired installation left its owned resource receipt"
     Assert ((Count-Entry $first) -eq 0 -and (Count-Entry $second) -eq 1) "Relocated upgrade was unregistered by an old uninstaller"
     & ./scripts/windows-cli.ps1 -Action Uninstall -InstallDirectory $second
     Assert ((User-Path) -ceq $baseline) "Uninstall changed unrelated PATH entries"

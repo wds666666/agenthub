@@ -144,3 +144,54 @@ pub(crate) fn copy(source: &Path, destination: &Path) -> Result<()> {
 pub(crate) fn invalid_digest(source: &Path) -> String {
     sha256(format!("invalid-skill:{}", source.display()).as_bytes())
 }
+
+/// Cheap portable metadata signature; never reads file bodies or follows links.
+pub(crate) fn fingerprint(source: &Path) -> Result<String> {
+    anyhow::ensure!(
+        fs::symlink_metadata(source)?.file_type().is_dir(),
+        "skill source must be an ordinary directory"
+    );
+    let mut entries = WalkDir::new(source)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|entry| !is_runtime(entry))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    entries.sort_by(|a, b| a.path().cmp(b.path()));
+    let mut hasher = Sha256::new();
+    for entry in entries {
+        let meta = fs::symlink_metadata(entry.path())?;
+        anyhow::ensure!(
+            !meta.file_type().is_symlink(),
+            "skill contains a nonportable symlink"
+        );
+        anyhow::ensure!(
+            meta.is_file() || meta.is_dir(),
+            "skill contains a special file"
+        );
+        hasher.update(
+            entry
+                .path()
+                .strip_prefix(source)?
+                .to_string_lossy()
+                .as_bytes(),
+        );
+        hasher.update(
+            format!(
+                "{:?}:{}:{:?}:{:?}",
+                meta.file_type(),
+                meta.len(),
+                meta.modified()?,
+                meta.created().ok()
+            )
+            .as_bytes(),
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            hasher.update(
+                format!("{}:{}:{}", meta.ino(), meta.ctime(), meta.ctime_nsec()).as_bytes(),
+            );
+        }
+    }
+    Ok(hex::encode(hasher.finalize()))
+}

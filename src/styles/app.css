@@ -825,3 +825,26 @@ code, pre { font-family: var(--mono); font-variant-ligatures: none; }
 .git-token-input .button { flex-shrink: 0; }
 .git-login-privacy { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; }
 .git-login-privacy svg { flex-shrink: 0; margin-top: 3px; }
+
+/* First-run choices use the existing inset material and shared controls. */
+.init-choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.init-choices article { display: flex; flex-direction: column; align-items: flex-start; gap: 14px; padding: 24px; border: 1px solid var(--line); border-radius: 18px; background: var(--material-inset); }
+.init-choices h2 { margin: 0; font-size: 18px; }
+.init-choices p { margin: 0 0 8px; color: var(--ink-secondary); line-height: 1.6; flex: 1; }
+.init-restore-form { padding-top: 8px; }
+.init-restore-form .remote-actions { justify-content: flex-end; }
+@media (max-width: 719px) { .init-choices { grid-template-columns: 1fr; } .init-choices article { padding: 20px; } }
+
+/* Read-only Skill reminders reuse existing semantic tokens and controls. */
+.skill-change-dot { display: inline-block; width: 8px; height: 8px; flex: 0 0 8px; border-radius: 50%; background: var(--red); }
+.skill-change-notice { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 20px; margin-bottom: 16px; }
+.skill-change-notice p { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 4px 0; }
+.skill-change-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.skill-check-error { color: var(--red); overflow-wrap: anywhere; }
+.skill-change-trigger { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 32px; min-height: 32px; border: 0; border-radius: var(--radius-control); background: transparent; cursor: pointer; }
+.skill-change-trigger:hover { background: var(--red-soft); }
+.skill-change-trigger:focus-visible { outline: 2px solid var(--red); outline-offset: 2px; }
+.skill-change-trigger:active { background: var(--red-soft); }
+.skill-change-trigger:disabled { opacity: .5; cursor: default; }
+
+.sidebar nav button .skill-change-dot { display: inline-block; flex: 0 0 8px; }

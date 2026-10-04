@@ -19,11 +19,67 @@ function Test-PathEntry([string]$Entry, [string]$Directory) {
     [StringComparer]::OrdinalIgnoreCase.Equals((Normalize-PathEntry $Entry), (Normalize-PathEntry $Directory))
 }
 
+# Stale resources are removed only when an exact previous package hash proves
+# ownership. Unknown files, edited files, libraries and reparse points survive.
+function Update-OwnedResources([string]$Directory) {
+    $manifestPath = Join-Path $Directory "windows-resources.json"
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { return }
+    $current = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    if ($current.product -ne "AgentHub" -or $current.schemaVersion -ne 1) { throw "Invalid resource ownership manifest." }
+    $receiptPath = Join-Path $Directory ".agenthub-installed-files.json"
+    $previous = @($current.legacy)
+    if (Test-Path -LiteralPath $receiptPath -PathType Leaf) {
+        if ((Get-Item -LiteralPath $receiptPath -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Resource ownership receipt cannot be a link." }
+        $receipt = Get-Content -LiteralPath $receiptPath -Raw | ConvertFrom-Json
+        if ($receipt.product -ne "AgentHub" -or $receipt.schemaVersion -ne 1) { throw "Invalid previous resource ownership receipt." }
+        $previous = @($receipt.files) + $previous
+    }
+    $protectedRoot = if ($env:AGENTHUB_HOME) { [IO.Path]::GetFullPath($env:AGENTHUB_HOME).TrimEnd('\', '/') } else { Join-Path $env:USERPROFILE ".agenthub" }
+    $currentPaths = @($current.files | ForEach-Object { $_.path })
+    foreach ($entry in $previous) {
+        if ($entry.path -in $currentPaths) { continue }
+        $relative = [string]$entry.path
+        if ($relative -notmatch '^skills/agenthub-manager/[a-zA-Z0-9_.\-/]+$' -or $relative.Split('/') -contains '..' -or $relative.Contains('//')) { continue }
+        if ([string]$entry.sha256 -notmatch '^[a-fA-F0-9]{64}$') { continue }
+        $candidate = [IO.Path]::GetFullPath((Join-Path $Directory $relative))
+        if ($candidate.StartsWith($protectedRoot + '\', [StringComparison]::OrdinalIgnoreCase) -or (Test-PathEntry $candidate $protectedRoot)) { continue }
+        $linked = $false
+        $ancestor = $candidate
+        while ($ancestor -and -not (Test-PathEntry $ancestor $Directory)) {
+            if (Test-Path -LiteralPath $ancestor) {
+                if ((Get-Item -LiteralPath $ancestor -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { $linked = $true; break }
+            }
+            $ancestor = Split-Path -Parent $ancestor
+        }
+        if (-not $linked -and (Test-Path -LiteralPath $candidate -PathType Leaf) -and (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash -ieq $entry.sha256) {
+            Remove-Item -LiteralPath $candidate -Force
+        }
+    }
+    # Installed files are recorded from the build manifest, never by scanning.
+    $receipt = @{ product = "AgentHub"; schemaVersion = 1; files = @($current.files) }
+    $temporaryReceipt = "$receiptPath.$([Guid]::NewGuid().ToString('N')).tmp"
+    $receipt | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $temporaryReceipt -Encoding UTF8
+    Move-Item -LiteralPath $temporaryReceipt -Destination $receiptPath -Force
+}
+
 $directory = [IO.Path]::GetFullPath($InstallDirectory).TrimEnd('\', '/')
 if ($directory.Contains(';')) { throw "The installation directory cannot contain a semicolon for command discovery." }
 $cliPath = Join-Path $directory "agenthub.exe"
 if ($Action -eq "Install" -and -not (Test-Path -LiteralPath $cliPath -PathType Leaf)) {
     throw "The bundled agenthub.exe was not installed."
+}
+if ($Action -eq "Install") { Update-OwnedResources $directory }
+if ($Action -eq "Uninstall") {
+    # A retired installation owns its receipt even when another directory now
+    # owns command registration. Preserve unknown/edited non-receipt files.
+    $receiptPath = Join-Path $directory ".agenthub-installed-files.json"
+    if ((Test-Path -LiteralPath $receiptPath -PathType Leaf) -and -not ((Get-Item -LiteralPath $receiptPath -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        $receipt = $null
+        try { $receipt = Get-Content -LiteralPath $receiptPath -Raw | ConvertFrom-Json } catch { }
+        if ($receipt -and $receipt.PSObject.Properties.Name -contains "product" -and $receipt.PSObject.Properties.Name -contains "schemaVersion" -and $receipt.product -eq "AgentHub" -and $receipt.schemaVersion -eq 1) {
+            Remove-Item -LiteralPath $receiptPath -Force
+        }
+    }
 }
 
 $userRegistry = [Microsoft.Win32.Registry]::CurrentUser

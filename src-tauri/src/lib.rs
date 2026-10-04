@@ -6,7 +6,9 @@ use agenthub_core::{
         GitIdentity, HostCleanupResult, HostResource, Plan, PolicySettings, RuleDocument,
         ScanImportResult, ScanItem, SyncSelection, Target, Transaction,
     },
-    planner, scanner, transaction, AgentHub,
+    planner, scanner,
+    skill_changes::{SkillChangeCache, SkillChangeReport},
+    transaction, AgentHub,
 };
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -247,6 +249,22 @@ fn delete_capabilities(
     })
 }
 
+static SKILL_CHANGES: std::sync::Mutex<SkillChangeCache> =
+    std::sync::Mutex::new(SkillChangeCache::new());
+
+#[tauri::command(async)]
+fn check_skill_changes(refresh: bool) -> Result<SkillChangeReport, String> {
+    let h = hub()?;
+    if !h.store.initialized().map_err(err)? {
+        return Ok(SkillChangeReport::default());
+    }
+    SKILL_CHANGES
+        .lock()
+        .map_err(err)?
+        .check(&h.paths, refresh)
+        .map_err(err)
+}
+
 #[tauri::command(async)]
 fn initial_scan() -> Result<Vec<ScanItem>, String> {
     let h = hub()?;
@@ -357,7 +375,11 @@ fn finish_init(selected_ids: Vec<String>) -> Result<Vec<String>, String> {
         format_args!("selected={}", selected_ids.len()),
     );
     let selected: std::collections::BTreeSet<_> = selected_ids.into_iter().collect();
-    let mut items = scanner::scan_global(&h.paths, &Target::ALL).map_err(err)?;
+    let mut items = if selected.is_empty() {
+        Vec::new()
+    } else {
+        scanner::scan_global(&h.paths, &Target::ALL).map_err(err)?
+    };
     for item in &mut items {
         item.selected = selected.contains(&item.id);
     }
@@ -375,6 +397,21 @@ fn finish_init(selected_ids: Vec<String>) -> Result<Vec<String>, String> {
         format_args!("imported={}", ids.len()),
     );
     Ok(ids)
+}
+#[tauri::command(async)]
+fn restore_library(
+    url: String,
+    branch: String,
+    username: Option<String>,
+    token: Option<String>,
+) -> Result<agenthub_core::bootstrap::RestoreResult, String> {
+    let _init = InitGuard::acquire()?;
+    let h = hub()?;
+    let DesktopHub { inner, _guard } = h;
+    let paths = inner.paths.clone();
+    drop(inner);
+    agenthub_core::bootstrap::restore(&paths, &url, &branch, username.as_deref(), token.as_deref())
+        .map_err(|error| import_error("restore", error))
 }
 #[tauri::command(async)]
 fn discard_incomplete_init() -> Result<(), String> {
@@ -694,10 +731,12 @@ pub fn run() {
             delete_capability,
             delete_capabilities,
             initial_scan,
+            check_skill_changes,
             host_inventory,
             cleanup_host_resources,
             import_scanned,
             finish_init,
+            restore_library,
             discard_incomplete_init,
             reset_failed_initialization,
             set_target,

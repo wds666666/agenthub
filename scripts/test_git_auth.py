@@ -94,6 +94,14 @@ def main():
 
         try:
             root = temporary / 'library'
+            # First-run failure must not initialize or retain staging credentials.
+            empty_restore = temporary / 'empty-restore'
+            run(empty_restore, 'bootstrap', url, '--username', 'tester', secret=token, success=False)
+            assert not run(empty_restore, 'doctor', '--json')['initialized']
+            assert not list(temporary.glob('empty-restore-restore-*'))
+            bad_auth = temporary / 'bad-auth-restore'
+            run(bad_auth, 'bootstrap', url, '--username', 'tester', secret='wrong-fixture', success=False)
+            assert not list(temporary.glob('bad-auth-restore-restore-*'))
             run(root, 'init', '--empty')
             skill = root / 'skills' / 'one'
             skill.mkdir()
@@ -130,6 +138,90 @@ def main():
             run(second, 'git', 'login', url, '--branch', 'agenthub', '--username', 'tester', secret=token)
             run(second, 'git', 'sync')
             assert (second / 'skills/one/SKILL.md').exists()
+            # Restore exact existing history while the server rejects every push.
+            expected = subprocess.check_output([git, '-C', str(repo), 'rev-parse', 'refs/heads/agenthub'], text=True).strip()
+            mode['read_only'] = True
+            restored = temporary / 'restored-library'
+            result = run(restored, 'bootstrap', url, '--username', 'tester', secret=token)
+            assert result['branch'] == 'agenthub' and result['imported'] == 2
+            assert Path(result['recovery_path']).is_dir()
+            assert subprocess.check_output([git, '-C', str(restored), 'rev-parse', 'HEAD'], text=True).strip() == expected
+            assert subprocess.check_output([git, '-C', str(repo), 'rev-parse', 'refs/heads/agenthub'], text=True).strip() == expected
+            assert run(restored, 'git', 'remote-status')['state'] == 'read_verified'
+            assert run(restored, 'doctor', '--json')['targets'] == []
+            assert all(not profile['enabled'] for profile in run(restored, 'doctor', '--json')['autoSync'])
+            assert not subprocess.check_output([git, '-C', str(restored), 'status', '--porcelain'], text=True).strip()
+            run(restored, 'bootstrap', url, '--username', 'tester', secret=token, success=False)
+            assert (restored / 'skills/one/SKILL.md').read_text() == '# One\n'
+            missing = temporary / 'missing-branch'
+            run(missing, 'bootstrap', url, '--branch', 'missing', '--username', 'tester', secret=token, success=False)
+            assert not run(missing, 'doctor', '--json')['initialized']
+            # Malformed layouts, symlinks, schemas and nonportable history fail before activation.
+            def git_repo(*args, data=None):
+                return subprocess.check_output([git, '-C', str(repo), *args], input=data, text=True).strip()
+
+            clean_tree = git_repo('rev-parse', expected + '^{tree}')
+            manifest_blob = git_repo('hash-object', '-w', '--stdin', data='schema_version = 1\n')
+            unsafe_blob = git_repo('hash-object', '-w', '--stdin', data='fixture-only')
+            wrong_schema_blob = git_repo('hash-object', '-w', '--stdin', data='schema_version = 99\n')
+            bad_trees = {
+                'not-agenthub': git_repo('mktree', data=f'100644 blob {unsafe_blob}\tREADME.md\n'),
+                'bad-schema': git_repo('mktree', data=f'100644 blob {wrong_schema_blob}\tagenthub.toml\n'),
+                'symlink': git_repo('mktree', data=f'120000 blob {unsafe_blob}\tagenthub.toml\n'),
+                'bad-history': clean_tree,
+            }
+            historical_tree = git_repo('mktree', data=f'100644 blob {manifest_blob}\tagenthub.toml\n100644 blob {unsafe_blob}\tprivate-runtime.txt\n')
+            historical = git_repo('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.com', 'commit-tree', historical_tree, '-m', 'unsafe old content')
+            for name, tree in bad_trees.items():
+                parent = ['-p', historical] if name == 'bad-history' else []
+                commit = git_repo('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.com', 'commit-tree', tree, *parent, '-m', name)
+                git_repo('update-ref', 'refs/heads/' + name, commit)
+                destination = temporary / ('rejected-' + name)
+                run(destination, 'bootstrap', url, '--branch', name, '--username', 'tester', secret=token, success=False)
+                assert not run(destination, 'doctor', '--json')['initialized']
+                assert not list(temporary.glob(destination.name + '-restore-*'))
+                assert not (destination / 'secrets/master.key').exists()
+            # GitHub-style default main branch works without a fixed agenthub branch.
+            default_repo = server_root / 'default.git'
+            subprocess.run([git, 'clone', '--bare', str(repo), str(default_repo)], check=True, capture_output=True)
+            subprocess.run([git, '-C', str(default_repo), 'update-ref', 'refs/heads/main', expected], check=True)
+            subprocess.run([git, '-C', str(default_repo), 'update-ref', '-d', 'refs/heads/agenthub'], check=True)
+            subprocess.run([git, '-C', str(default_repo), 'symbolic-ref', 'HEAD', 'refs/heads/main'], check=True)
+            main_restore = temporary / 'default-main-restore'
+            result = run(main_restore, 'bootstrap', url.replace('/repo.git', '/default.git'), '--username', 'tester', secret=token)
+            assert result['branch'] == 'main' and result['imported'] == 2
+            assert subprocess.check_output([git, '-C', str(main_restore), 'rev-parse', 'HEAD'], text=True).strip() == expected
+            # A freshly restored device receives an advanced remote without an author.
+            subprocess.run([git, '-C', str(default_repo), 'config', 'http.receivepack', 'true'], check=True)
+            next_version = subprocess.check_output([git, '-C', str(default_repo), '-c', 'user.name=Other device', '-c', 'user.email=other@example.com', 'commit-tree', clean_tree, '-p', expected, '-m', 'new remote version'], text=True).strip()
+            subprocess.run([git, '-C', str(default_repo), 'update-ref', 'refs/heads/main', next_version], check=True)
+            mode['read_only'] = False
+            run(main_restore, 'git', 'sync')
+            assert subprocess.check_output([git, '-C', str(main_restore), 'rev-parse', 'HEAD'], text=True).strip() == next_version
+            assert not list((main_restore / 'runtime').glob('receive-*'))
+            # No synthetic merge or fabricated local author was introduced.
+            check = subprocess.run([git, '-C', str(main_restore), 'config', '--local', '--get', 'user.name'], capture_output=True)
+            assert check.returncode != 0
+            invalid_version = subprocess.check_output([git, '-C', str(default_repo), '-c', 'user.name=Other device', '-c', 'user.email=other@example.com', 'commit-tree', bad_trees['bad-schema'], '-p', next_version, '-m', 'invalid incoming schema'], text=True).strip()
+            subprocess.run([git, '-C', str(default_repo), 'update-ref', 'refs/heads/main', invalid_version], check=True)
+            run(main_restore, 'git', 'sync', success=False)
+            assert subprocess.check_output([git, '-C', str(main_restore), 'rev-parse', 'HEAD'], text=True).strip() == next_version
+            assert (main_restore / 'skills/one/SKILL.md').read_text() == '# One\n'
+            assert not list((main_restore / 'runtime').glob('receive-*'))
+            # Dropped local state is reconstructed; reinstall never requires reimport.
+            for path in (restored / 'state').glob('agenthub.db*'):
+                path.unlink()
+            assert run(restored, 'doctor', '--json')['initialized']
+            # A restored device can continue the same history using the saved login.
+            mode['read_only'] = False
+            run(restored, 'git', 'commit', '-m', 'unchanged', '--name', 'Tester', '--email', 'test@example.com', success=False)
+            (restored / 'skills/three').mkdir()
+            (restored / 'skills/three/SKILL.md').write_text('# Three restored device update\n')
+            result = run(restored, 'git', 'commit', '-m', 'restored device save')
+            # SQLite reconstruction loses credentials, as expected; sign in again.
+            assert result['local_saved'] and not result['remote_synced']
+            run(restored, 'git', 'login', url, '--branch', 'agenthub', '--username', 'tester', secret=token)
+            run(restored, 'git', 'sync')
             # A push permission failure must preserve a newly saved local version.
             mode['read_only'] = True
             (root / 'skills/one/SKILL.md').write_text('# One updated\n')
@@ -149,7 +241,7 @@ def main():
             settings = run(root, 'git', 'remote-status')
             assert settings['url'] == url and not settings['credential_saved'] and settings['state'] == 'unverified'
             run(root, 'git', 'sync', success=False)
-            print('PASS: real HTTPS login, shared native helper, two-device merge, rejected push preserves commit, replacement rollback, encryption, forget, credential-free output')
+            print('PASS: real HTTPS login, shared native helper, read-only bootstrap with exact history, author-free reception, rejected layouts/branches/auth/history, SQLite recovery, two-device merge, rejected push preserves commit, replacement rollback, encryption, forget, credential-free output')
         finally:
             server.shutdown()
             server.server_close()

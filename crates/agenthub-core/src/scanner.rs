@@ -201,7 +201,7 @@ fn mcp_item(source: &str, path: PathBuf, name: &str, digest: String) -> ScanItem
         warning_detail: None,
     }
 }
-fn item(
+pub(crate) fn item(
     kind: CapabilityKind,
     source: &str,
     path: PathBuf,

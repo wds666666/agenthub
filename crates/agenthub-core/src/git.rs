@@ -36,7 +36,7 @@ pub fn available() -> bool {
         .is_ok_and(|output| output.status.success())
 }
 
-fn run(root: &Path, args: &[&str]) -> Result<String> {
+pub(crate) fn run(root: &Path, args: &[&str]) -> Result<String> {
     let network_url = if matches!(args.first(), Some(&"ls-remote" | &"fetch" | &"push")) {
         args.iter().find(|arg| {
             arg.starts_with("https://") || arg.starts_with("ssh://") || arg.starts_with("git@")
@@ -328,7 +328,7 @@ pub fn connect_remote(root: &Path, url: &str, branch: &str) -> Result<RemoteSett
     crate::git_auth::remember_state(root, url, branch, "read_verified")?;
     remote_settings(root)
 }
-fn validate_remote(url: &str) -> Result<()> {
+pub(crate) fn validate_remote(url: &str) -> Result<()> {
     let https = url.strip_prefix("https://");
     let ssh = url.strip_prefix("ssh://");
     let scp = url.starts_with("git@") && url.contains(':');
@@ -392,6 +392,14 @@ fn reconcile(root: &Path, url: &str, branch: &str) -> Result<()> {
     if run(root, &["merge-base", "--is-ancestor", "FETCH_HEAD", "HEAD"]).is_ok() {
         return Ok(());
     }
+    if run(root, &["merge-base", "--is-ancestor", "HEAD", "FETCH_HEAD"]).is_ok() {
+        validate_incoming(root)?;
+        // No merge commit or author setup is needed for a restored device that
+        // merely follows newer remote versions. A concurrent local edit is still
+        // protected by Git's ordinary fast-forward/working-tree checks.
+        run(root, &["merge", "--ff-only", "FETCH_HEAD"])?;
+        return Ok(());
+    }
     let result = (|| -> Result<()> {
         run(
             root,
@@ -425,6 +433,48 @@ fn reconcile(root: &Path, url: &str, branch: &str) -> Result<()> {
         anyhow::bail!("remote merge stopped; local version preserved. Resolve conflicting resources before retrying: {conflicts} {error}");
     }
     Ok(())
+}
+
+fn validate_incoming(root: &Path) -> Result<()> {
+    let source_root = root.canonicalize()?;
+    let stage_root = source_root
+        .join("runtime")
+        .join(format!("receive-{}", uuid::Uuid::new_v4()));
+    let runtime = stage_root.parent().context("incoming stage parent")?;
+    if runtime.exists() {
+        anyhow::ensure!(
+            std::fs::symlink_metadata(runtime)?.file_type().is_dir(),
+            "incoming validation runtime cannot be a symlink"
+        );
+    }
+    std::fs::create_dir_all(runtime)?;
+    let result = (|| -> Result<()> {
+        let incoming = run(root, &["rev-parse", "FETCH_HEAD"])?;
+        // Local object sharing copies no runtime state and makes no network
+        // request. Hooks remain disabled by the common process wrapper.
+        run(
+            root,
+            &[
+                "clone",
+                "--shared",
+                "--no-checkout",
+                "--",
+                source_root.to_str().context("invalid library path")?,
+                stage_root.to_str().context("invalid staging path")?,
+            ],
+        )?;
+        run(&stage_root, &["checkout", "--detach", &incoming])?;
+        let paths = crate::paths::AgentHubPaths::new(root.to_path_buf(), stage_root.clone());
+        paths.ensure_runtime()?;
+        crate::canonical::validate(&paths).context("incoming library validation failed")?;
+        check_upload_history(&stage_root).context("incoming history is not portable")?;
+        Ok(())
+    })();
+    if stage_root.exists() {
+        std::fs::remove_dir_all(&stage_root)
+            .context("clean private incoming validation checkout")?;
+    }
+    result
 }
 
 fn credential_name(name: &str) -> bool {
@@ -503,7 +553,7 @@ fn has_plaintext_credentials(value: &serde_json::Value) -> bool {
     }
 }
 /// Check history as well as HEAD: deleting a token in a later version does not remove it from a push.
-fn check_upload_history(root: &Path) -> Result<()> {
+pub(crate) fn check_upload_history(root: &Path) -> Result<()> {
     let objects = run(root, &["rev-list", "--objects", "HEAD"])?;
     for line in objects.lines() {
         let Some((object, path)) = line.split_once(' ') else {

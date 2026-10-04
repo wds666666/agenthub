@@ -113,6 +113,7 @@ jobs:
           # the .deb plus the raw executables instead of failing the release there.
           cargo tauri build --bundles deb
           python3 scripts/test_git_auth.py target/release/agenthub target/release/agenthub-desktop
+          python3 scripts/test_linux_package.py
 
       - name: Collect Linux artifacts
         run: |

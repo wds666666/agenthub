@@ -73,4 +73,14 @@ Host Resources also offers a quick-clean action for every adapter-confirmed dele
 
 ## Repository authentication and state
 
+First-run restoration reads only. A supplied branch must exist; an omitted branch prefers `agenthub` when present, otherwise the remote HEAD branch. Empty repositories and non-AgentHub/unsupported layouts fail without changing the local library or remote. The restored local HEAD equals the remote branch commit, and subsequent version saves use the same remote/branch and normal fetch/merge/push rules. Connection after restoration is read-verified, not write-verified. Each device authorizes separately and starts with no enabled host or automatic-sync profiles.
+
+When the local version is an ancestor of the fetched version, validate the incoming library and history in a private local checkout before fast-forwarding. This receives versions without creating a synthetic local merge commit or requiring a new device to configure an author first. Divergent versions still use the reviewed conflict-preserving merge path. Sync remains bidirectional and needs write permission; author identity is required when saving local changes.
+
 GitHub and self-hosted Git/Gitea support HTTPS username/access-token sign-in. Login verifies reading without uploading; an actual push establishes upload permission. UI states distinguish configured but unverified, last read verification, last successful sync, failed authentication and incomplete sync. A stored URL alone is not successful authentication. Only an explicit sign-in-and-retry action retries the failed upload after login, and local commits remain saved. Forgetting credentials preserves repository configuration, library content and versions.
+
+## Skill change reminders
+
+The initialized desktop checks existing library Skill IDs in Shared Agents, Cursor, Codex and Claude Code automatically while visible, with a two-minute minimum interval. Only ordinary first-level Skill directories are candidates. Compare the complete portable content, including supporting files, using the existing runtime exclusions. Metadata fingerprints cache per-directory digests; unchanged content is rehashed after thirty minutes. Filesystem errors produce a partial-check warning, never a false clean result. The check never imports, writes hosts, commits or accesses the network.
+
+A differing same-ID resource shows a red reminder in library navigation and on the corresponding Skill. Content already present anywhere in the library is excluded, so explicitly importing a changed copy clears its reminder after recheck. Opening a reminder does not mark it resolved. The review dialog shows source and path, leaves selection empty, and uses the existing atomic reverse-import command with stale-result validation. Import retains the original library item and adds the changed content under a unique ID; it is not an in-place update or merge. Existing optional sync-after-import policy remains applicable.

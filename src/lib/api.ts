@@ -8,6 +8,8 @@ export interface Transaction { id: string; plan_id: string; target: Target; stat
 export interface SyncRunResult { changed: boolean; plan: Plan; transaction?: Transaction }
 export interface Dashboard { initialized: boolean; inventory: Record<string, number>; enabled_targets: Target[]; auto_sync_targets: Target[]; dirty: boolean; recent_transactions: Transaction[] }
 export interface ScanItem { id: string; kind: Kind; source: string; path: string; digest: string; selected: boolean; importable: boolean; source_key?: string; warning?: string; warning_detail?: string }
+export interface SkillChange { canonical_id: string; item: ScanItem }
+export interface SkillChangeReport { changes: SkillChange[]; errors: string[] }
 export type HostRelation = "canonical_match" | "host_only" | "constraint";
 export interface HostResource { id: string; target: Target; kind: Kind; display_name: string; path: string; digest: string; relation: HostRelation; canonical_id?: string; deletable: boolean; constraint?: string }
 export interface HostCleanupResult { id: string; deleted: string[]; backup_path: string }
@@ -28,10 +30,11 @@ export interface Plan { id: string; target: Target; steps: PlanStep[]; summary: 
 export interface RuleDocument { schemaVersion: number; id: string; displayName: string; activation: "always" | "manual" | "paths"; paths: string[]; targets: Target[]; body: string }
 export interface RemoteSettings { url?: string; branch: string; state?: "disconnected" | "unverified" | "read_verified" | "synced" | "auth_failed" | "network_error" | "sync_failed"; credential_saved?: boolean }
 export interface CommitResult { local_saved: boolean; remote_synced: boolean; remote_error?: string }
+export interface RestoreResult { imported: number; branch: string; recovery_path: string }
 export interface GitIdentity { name?: string; email?: string }
 const isTauri = () => "__TAURI_INTERNALS__" in window;
 const demo: Dashboard = { initialized: true, inventory: { skill: 4, mcp: 2, plugin: 1, rule: 3 }, enabled_targets: ["codex"], auto_sync_targets: ["codex"], dirty: true, recent_transactions: [] };
-async function call<T>(name: string, args?: Record<string, unknown>): Promise<T> { if (!isTauri()) { if (name === "dashboard") return demo as T; if (name === "runtime_diagnostics") return { log_dir: "~/.local/share/dev.agenthub.desktop/logs", canonical_root: "~/.agenthub", git_available: true, platform: "linux" } as T; if (name === "inventory" || name === "transaction_history" || name === "auto_sync_profiles") return [] as T; if (name === "git_status") return "## main\n M rules/safety/rule.md" as T; if (name === "git_diff") return "Canonical diff is available in the desktop app." as T; if (name === "git_log") return "a1b2c3d\t2026-09-27 18:30:00 +0800\tInitialize Canonical" as T; if (name === "remote_settings") return { branch: "main" } as T; if (name === "git_identity") return { name: "AgentHub User", email: "user@example.com" } as T; throw new Error("This action requires the AgentHub desktop runtime."); } return invoke<T>(name, args); }
+async function call<T>(name: string, args?: Record<string, unknown>): Promise<T> { if (!isTauri()) { if (name === "check_skill_changes") return { changes: [], errors: [] } as T; if (name === "dashboard") return demo as T; if (name === "runtime_diagnostics") return { log_dir: "~/.local/share/dev.agenthub.desktop/logs", canonical_root: "~/.agenthub", git_available: true, platform: "linux" } as T; if (name === "inventory" || name === "transaction_history" || name === "auto_sync_profiles") return [] as T; if (name === "git_status") return "## main\n M rules/safety/rule.md" as T; if (name === "git_diff") return "Canonical diff is available in the desktop app." as T; if (name === "git_log") return "a1b2c3d\t2026-09-27 18:30:00 +0800\tInitialize Canonical" as T; if (name === "remote_settings") return { branch: "main" } as T; if (name === "git_identity") return { name: "AgentHub User", email: "user@example.com" } as T; throw new Error("This action requires the AgentHub desktop runtime."); } return invoke<T>(name, args); }
 export const api = {
   dashboard: () => call<Dashboard>("dashboard"),
   runtimeDiagnostics: () => call<RuntimeDiagnostics>("runtime_diagnostics"),
@@ -41,11 +44,13 @@ export const api = {
   saveRule: (rule: RuleDocument, create: boolean) => call<CapabilityMutationResult>("save_rule", { rule, create }),
   deleteCapability: (kind: Kind, id: string) => call<CapabilityDeleteResult>("delete_capability", { kind, id }),
   deleteCapabilities: (selected: CapabilityKey[]) => call<CapabilityBatchDeleteResult>("delete_capabilities", { selected }),
+  checkSkillChanges: (refresh = false) => call<SkillChangeReport>("check_skill_changes", { refresh }),
   scan: () => call<ScanItem[]>("initial_scan"),
   hostInventory: (target: Target) => call<HostResource[]>("host_inventory", { target }),
   cleanupHostResources: (target: Target, selectedIds: string[]) => call<HostCleanupResult>("cleanup_host_resources", { target, selectedIds }),
   importScanned: (selectedIds: string[]) => call<ScanImportResult>("import_scanned", { selectedIds }),
   finishInit: (selectedIds: string[]) => call<string[]>("finish_init", { selectedIds }),
+  restoreLibrary: (url: string, branch: string, username?: string, token?: string) => call<RestoreResult>("restore_library", { url, branch, username: username ?? null, token: token ?? null }),
   discardIncompleteInit: () => call<void>("discard_incomplete_init"),
   resetFailedInitialization: () => call<void>("reset_failed_initialization"),
   setTarget: (target: Target, enabled: boolean) => call<void>("set_target", { target, enabled }),

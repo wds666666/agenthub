@@ -1,0 +1,82 @@
+{
+  "product": "AgentHub",
+  "schemaVersion": 1,
+  "files": [
+    {
+      "path": "skills/agenthub-manager/SKILL.md",
+      "sha256": "6bd60a2c3802aa8d457475e0935cb5b2a7ff2e4f5f9ddd6e5c7d3ed8886fc314"
+    },
+    {
+      "path": "skills/agenthub-manager/agents/openai.yaml",
+      "sha256": "c8618d25510cc1e76e13405ad622411cda1d304074dc9dd5e18d6fd4ede18928"
+    },
+    {
+      "path": "skills/agenthub-manager/references/selection.md",
+      "sha256": "3095d4b3696bf7ad54df740d5b2839d12af0689132439f8aef8b6658eef95bcd"
+    },
+    {
+      "path": "skills/agenthub-manager/SKILL.md",
+      "sha256": "1a258a7e636163fddeadcb8b51c4af3cbd5e1be15c22b92bcfe7e9e972caebed"
+    },
+    {
+      "path": "skills/agenthub-manager/references/storage.md",
+      "sha256": "5f0d4450ffcfc23d722b7780d1843c5a268479ccfbc139a2b05f7bd0c1e01c1f"
+    },
+    {
+      "path": "skills/agenthub-manager/SKILL.md",
+      "sha256": "657a8d7c429a379509a4b8577a1a736ee9cccb5c22f07b17a07930aa6c843393"
+    },
+    {
+      "path": "skills/agenthub-manager/agents/openai.yaml",
+      "sha256": "9aa396514a6eeff2820f2160ea12cef6956754bd4a1d64938c141ed6765902e6"
+    },
+    {
+      "path": "skills/agenthub-manager/references/conflicts.md",
+      "sha256": "9f19701b71747fc3554042952f232df97a5055dc5e9e9f9fb4c08e9b9cb4749b"
+    },
+    {
+      "path": "skills/agenthub-manager/references/formats.md",
+      "sha256": "d846f667d293a7b3a7b361942e953801c47d15568b8de76a7d4cc8a5708b9946"
+    },
+    {
+      "path": "skills/agenthub-manager/references/installation.md",
+      "sha256": "9cb0a390b1d7fa28c004fad26ab792bf873d50e0f655526ec2ce967f5476dc80"
+    },
+    {
+      "path": "skills/agenthub-manager/references/migration.md",
+      "sha256": "c6bfa330c62d7c58388c1ac55a4ba462a4098b480368e1199082284dc3b06bef"
+    },
+    {
+      "path": "skills/agenthub-manager/references/selection.md",
+      "sha256": "6c29dd65022d4b75a7673fe87db682236b7809cc6995fbb0233922555ce5ed7b"
+    },
+    {
+      "path": "skills/agenthub-manager/references/storage.md",
+      "sha256": "64f1c2526e04ea26737fa4a04fe9d2106cfa05991994ea97ac2a8417681519d8"
+    },
+    {
+      "path": "skills/agenthub-manager/scripts/agenthub.ps1",
+      "sha256": "2c2c301fc0ca2cf65e0db2ba8600b2a1a2c5a7ae8f3605998d1c2306030ba18e"
+    },
+    {
+      "path": "skills/agenthub-manager/references/migration.md",
+      "sha256": "ee01434ac2b6ade7e65a7157cb5f94f65efc365baf75ab13c051a0093f23615e"
+    },
+    {
+      "path": "skills/agenthub-manager/SKILL.md",
+      "sha256": "8857038b4b0c76a7efc55a85f012e72db56ade293efa6aca50e298b0cb335b05"
+    },
+    {
+      "path": "skills/agenthub-manager/references/installation.md",
+      "sha256": "e7eef44a073ffd52df19b4affa9a2b240eebb3531688b9ebedc6f8e2c1bb361b"
+    },
+    {
+      "path": "skills/agenthub-manager/references/migration.md",
+      "sha256": "0707c65012736cb15f198bc72ce09d4ff29fae998e9fb402d40f95d3dd13b412"
+    },
+    {
+      "path": "skills/agenthub-manager/references/storage.md",
+      "sha256": "adadc59965692ae1dc55d6220b41fd9e554250bb5af8753af313367086d697f2"
+    }
+  ]
+}

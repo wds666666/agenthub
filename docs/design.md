@@ -70,3 +70,7 @@ Import checkbox hit areas are anchored to the containing row, including narrow l
 Library selection uses persistent row checkboxes and a wrapping toolbar with selected count, visible-result/category shortcuts, clear and a named danger action. Confirmation lists every selected resource; a successful batch leaves a readable recovery path. Import source buttons always include all supported tools, wrap within narrow dialogs, and separate discovered/new-resource counts. No new color or component vocabulary is introduced.
 
 Git login reuses Dialog, field, Button, StatusBadge and inline-error owners. Repository verification and stored credentials have separate readable labels. Token reveal controls have a localized accessible name and never persist the token in browser storage.
+
+First-run source choices reuse Button and material/inset surfaces in a wrapping two-column layout. Restore fields reuse the Versions credential owner. The panel remains the single scroll surface on narrow windows; no new token palette, font or ornamental animation is introduced.
+
+Skill change reminders use the existing `--red` token as a small status dot, paired with localized text/count and a review button. They do not add a new palette, animate continuously, or use destructive-button styling for the safe review action. Navigation dots remain visible in the compact sidebar; row dots have keyboard-accessible review controls.

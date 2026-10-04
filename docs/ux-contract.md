@@ -38,4 +38,10 @@
 
 ## Git sign-in
 
+First run offers two equally discoverable actions: create a library from local tools, or restore an existing AgentHub library. Restore reuses repository fields, shared credential fields, Button, inline error/status and token controls from Versions. Branch is optional with an explicit auto-selection hint. HTTPS supports token or system credentials; SSH uses the existing system agent. Pending blocks repeated submission and switching paths. Errors preserve the form and explain retry, unsupported layouts and existing-data protection. Back clears sensitive input. Success opens the library with a restored-resource toast; no tool is changed. New-library import also offers an explicit empty-library action instead of requiring a scan.
+
 Versions offers a repository sign-in dialog for GitHub and self-hosted Git/Gitea. It shows the repository address, username, a hidden access token with an accessible reveal button, local encrypted persistence and required repository read/write permissions. Loading, failure and success are visible inline. Submission blocks closing and repeat submission. Failed validation preserves form input; closing clears the token. Sign-in and sign-in-and-retry have distinct labels. Read access does not imply upload permission.
+
+## Skill change reminders
+
+Initialized desktop entry and visible-window checks detect different portable content for existing Skill IDs across all four tool roots. Navigation and affected library rows show a red dot with a localized accessible label; the library also shows a count and review action. Opening a reminder preserves it until content is imported or restored to a known library digest. Review reuses the source/category import dialog, starts with no selection and explains that importing preserves the original and adds a separate entry. Checking/error states remain inline; a partial error retains valid results and does not claim all Skills are unchanged. Hidden windows do not periodically check; returning to the window respects the same two-minute cooldown.

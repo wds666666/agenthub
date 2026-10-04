@@ -44,6 +44,8 @@ import { t } from "./lib/i18n";
 import agentHubLogo from "./assets/agenthub-logo.png";
 import { Button, Dialog, PageHeader, SearchField, StatusBadge, Toast } from "./components/ui";
 import { SyncRail } from "./components/SyncRail";
+import { useSkillChanges } from "./lib/useSkillChanges";
+import { RepositoryCredentials } from "./components/RepositoryCredentials";
 import "./styles/tokens.css";
 import "./styles/app.css";
 
@@ -135,6 +137,7 @@ export default function App() {
   const [error, setError] = useState("");
   const [repairing, setRepairing] = useState(false);
   const [toast, setToast] = useState("");
+  const skillChanges = useSkillChanges(Boolean(dashboard?.initialized), page);
 
   const refresh = useCallback(() => {
     setError("");
@@ -182,11 +185,11 @@ export default function App() {
     );
   }
 
-  if (!dashboard.initialized) return <Init recoveryPath={resetRecovery} onDone={(count) => { setResetRecovery(""); setToast(`${count} ${t("inventory.scanImported")}`); refresh(); }} />;
+  if (!dashboard.initialized) return <Init recoveryPath={resetRecovery} onDone={(count, restored) => { setResetRecovery(""); if (restored) setPage("inventory"); setToast(`${count} ${t(restored ? "init.restored" : "inventory.scanImported")}`); refresh(); }} />;
 
   const content = {
     overview: <Overview data={dashboard} />,
-    inventory: <Inventory onChanged={refresh} onNotify={setToast} />,
+    inventory: <Inventory onChanged={refresh} onNotify={setToast} skillChanges={skillChanges} />,
     hosts: <HostResources onNotify={setToast} />,
     sync: <Sync onApplied={refresh} onNotify={setToast} />,
     git: <GitPage onCommitted={() => { setToast(t("toast.committed")); refresh(); }} />,
@@ -209,12 +212,13 @@ export default function App() {
               type="button"
               className={page === id ? "active" : ""}
               aria-current={page === id ? "page" : undefined}
-              aria-label={t(`nav.${id}`)}
+              aria-label={id === "inventory" && skillChanges.changes.length ? `${t(`nav.${id}`)} · ${t("inventory.skillChanges")} ${skillChanges.changes.length}` : t(`nav.${id}`)}
               onClick={() => setPage(id)}
               key={id}
             >
               <NavIcon size={19} />
               <span>{t(`nav.${id}`)}</span>
+              {id === "inventory" && skillChanges.changes.length > 0 && <span className="skill-change-dot" aria-hidden="true" />}
               {page === id && <ChevronRight className="nav-chevron" size={15} aria-hidden="true" />}
             </button>
           ))}
@@ -283,7 +287,7 @@ function Overview({ data }: { data: Dashboard }) {
   );
 }
 
-function Inventory({ onChanged, onNotify }: { onChanged: () => void; onNotify: (message: string) => void }) {
+function Inventory({ onChanged, onNotify, skillChanges }: { onChanged: () => void; onNotify: (message: string) => void; skillChanges: ReturnType<typeof useSkillChanges> }) {
   const [items, setItems] = useState<Capability[]>([]);
   const [query, setQuery] = useState("");
   const [editor, setEditor] = useState<{ document: RuleDocument; create: boolean; imported: boolean } | null>(null);
@@ -304,6 +308,7 @@ function Inventory({ onChanged, onNotify }: { onChanged: () => void; onNotify: (
   const [deleteCandidate, setDeleteCandidate] = useState<Capability | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [scanItems, setScanItems] = useState<ScanItem[] | null>(null);
+  const [changeReview, setChangeReview] = useState(false);
   const [scanSelected, setScanSelected] = useState<Set<string>>(new Set());
   const [scanKind, setScanKind] = useState<Kind>("skill");
   const [scanSource, setScanSource] = useState("all");
@@ -387,7 +392,7 @@ function Inventory({ onChanged, onNotify }: { onChanged: () => void; onNotify: (
     if (scanPending.current) return;
     scanPending.current = true;
     setScanBusy(true); setLoadError("");
-    try { setScanItems(await api.scan()); setScanSelected(new Set()); setScanSource("all"); }
+    try { setScanItems(await api.scan()); setChangeReview(false); setScanSelected(new Set()); setScanSource("all"); }
     catch (value) { setLoadError(String(value)); }
     finally { scanPending.current = false; setScanBusy(false); }
   };
@@ -397,11 +402,15 @@ function Inventory({ onChanged, onNotify }: { onChanged: () => void; onNotify: (
     setScanBusy(true); setLoadError("");
     try {
       const result = await api.importScanned([...scanSelected]);
-      setScanItems(null); setScanSelected(new Set()); loadInventory(); onChanged();
+      setScanItems(null); setScanSelected(new Set()); loadInventory(); onChanged(); void skillChanges.check(true);
       const autoFailures = result.auto_sync.filter((outcome) => outcome.error).length;
       onNotify(`${result.imported.length} ${t("inventory.scanImported")} · ${result.skipped_duplicates} ${t("inventory.scanSkipped")}${autoFailures ? ` · ${autoFailures} ${t("inventory.scanAutoFailed")}` : ""}`);
     } catch (value) { setLoadError(String(value)); }
     finally { scanPending.current = false; setScanBusy(false); }
+  };
+  const reviewChanges = (id?: string) => {
+    setScanItems(skillChanges.changes.filter((change) => !id || change.canonical_id === id).map((change) => change.item));
+    setChangeReview(true); setScanSelected(new Set()); setScanSource("all"); setScanKind("skill");
   };
   const canonicalDigests = useMemo(() => new Set(items.map((item) => `${item.kind}:${item.digest}`)), [items]);
   const visibleScanItems = (scanItems ?? []).filter((item) => item.kind === scanKind && (scanSource === "all" || item.source === scanSource));
@@ -423,6 +432,10 @@ function Inventory({ onChanged, onNotify }: { onChanged: () => void; onNotify: (
         }
       />
       {loadError && <div className="inline-error" role="alert"><Activity size={18} /><span>{loadError}</span></div>}
+      {(skillChanges.changes.length > 0 || skillChanges.checking || skillChanges.error || skillChanges.errors.length > 0) && <div className="skill-change-notice material">
+        <div role="status">{skillChanges.changes.length > 0 && <p><span className="skill-change-dot" aria-hidden="true" /><strong>{skillChanges.changes.length} {t("inventory.skillChanges")}</strong></p>}{skillChanges.checking && <p><RefreshCw className="spin" size={15} />{t("inventory.checkingSkills")}</p>}{(skillChanges.error || skillChanges.errors.length > 0) && <p className="skill-check-error">{t("inventory.skillCheckFailed")}<span>{skillChanges.error || `${skillChanges.errors.length} ${t("inventory.skillCheckUnavailable")}`}</span></p>}</div>
+        <div className="skill-change-actions">{skillChanges.changes.length > 0 && <Button variant="secondary" disabled={scanBusy} onClick={() => reviewChanges()}>{t("inventory.reviewSkillChanges")}</Button>}{(skillChanges.error || skillChanges.errors.length > 0) && <Button variant="quiet" disabled={skillChanges.checking} onClick={() => void skillChanges.check(true)}>{t("common.retry")}</Button>}</div>
+      </div>}
       <div className="inventory-selection material" role="group" aria-label={t("inventory.batchManage")}>
         <span role="status">{t("inventory.selectedCount")} <strong>{items.filter((item) => selected.has(keyOf(item))).length}</strong></span>
         <Button variant="quiet" disabled={deleting || !filtered.length} onClick={() => toggleSelection(filtered)}>{filtered.length > 0 && filtered.every((item) => selected.has(keyOf(item))) ? t("inventory.clearVisible") : t("inventory.selectVisible")}</Button>
@@ -453,6 +466,7 @@ function Inventory({ onChanged, onNotify }: { onChanged: () => void; onNotify: (
                       <code title={t("inventory.digest")}>{item.digest.slice(0, 8)}</code>
                       <ChevronRight size={15} />
                     </button>
+                    {id === "skill" && skillChanges.changes.some((change) => change.canonical_id === item.id) && <button type="button" className="skill-change-trigger" disabled={scanBusy} aria-label={`${t("inventory.reviewSkillChanges")} ${item.display_name}`} title={t("inventory.skillChanges")} onClick={() => reviewChanges(item.id)}><span className="skill-change-dot" aria-hidden="true" /></button>}
                     {id === "rule" && (
                       <button className="capability-edit" type="button" disabled={loadingRule} onClick={() => void editRule(item.id)} aria-label={`${t("common.edit")} ${item.display_name}`}>
                         <Pencil size={15} />
@@ -480,8 +494,8 @@ function Inventory({ onChanged, onNotify }: { onChanged: () => void; onNotify: (
         <p>{t("inventory.deleteBody")}</p>
         <div className="delete-capability-preview"><span className="target-tab__mark">{deleteCandidate ? kindMeta.find((kind) => kind.id === deleteCandidate.kind)?.id.slice(0, 2).toUpperCase() : ""}</span><span><strong>{deleteCandidate?.display_name}</strong><code>{deleteCandidate?.id}</code></span></div>
       </Dialog>
-      <Dialog open={scanItems !== null} wide onClose={() => !scanBusy && setScanItems(null)} title={t("inventory.scanImportTitle")} actions={<><Button variant="secondary" disabled={scanBusy} onClick={() => setScanItems(null)}>{t("common.cancel")}</Button><Button disabled={scanBusy || scanSelected.size === 0} onClick={() => void importScanned()}>{scanBusy ? <RefreshCw className="spin" size={16} /> : <Upload size={16} />}{scanBusy ? t("inventory.importingScan") : t("inventory.importScanned")}</Button></>}>
-        <p>{t("inventory.scanImportBody")}</p>
+      <Dialog open={scanItems !== null} wide onClose={() => !scanBusy && setScanItems(null)} title={t(changeReview ? "inventory.reviewSkillChanges" : "inventory.scanImportTitle")} actions={<><Button variant="secondary" disabled={scanBusy} onClick={() => setScanItems(null)}>{t("common.cancel")}</Button><Button disabled={scanBusy || scanSelected.size === 0} onClick={() => void importScanned()}>{scanBusy ? <RefreshCw className="spin" size={16} /> : <Upload size={16} />}{scanBusy ? t("inventory.importingScan") : t("inventory.importScanned")}</Button></>}>
+        <p>{t(changeReview ? "inventory.skillChangeImportHint" : "inventory.scanImportBody")}</p>
         <ImportSourcePicker items={scanItems ?? []} available={scanImportableItems} selected={scanSelected} source={scanSource} onSource={setScanSource} onSelected={setScanSelected} busy={scanBusy} />
         <div className="scan-kind-tabs" role="tablist" aria-label={t("init.groups")}>
           {kindMeta.map(({ id, icon: KindIcon }) => { const group = (scanItems ?? []).filter((item) => item.kind === id && (scanSource === "all" || item.source === scanSource)); return <button type="button" role="tab" aria-selected={scanKind === id} className={scanKind === id ? "is-selected" : ""} disabled={scanBusy} onClick={() => setScanKind(id)} key={id}><KindIcon size={17} /><span><strong>{t(`kinds.${id}`)}</strong><small>{group.filter((item) => scanSelected.has(item.id)).length} / {group.length}</small></span></button>; })}
@@ -911,14 +925,14 @@ function GitPage({ onCommitted }: { onCommitted: () => void }) {
   const [loginPlatform, setLoginPlatform] = useState<"github" | "git">("git");
   const [loginUsername, setLoginUsername] = useState("");
   const [loginToken, setLoginToken] = useState("");
-  const [tokenVisible, setTokenVisible] = useState(false);
+
   const [loginError, setLoginError] = useState("");
   const [retryAfterLogin, setRetryAfterLogin] = useState(false);
   const openLogin = (retry = false) => {
     setLoginPlatform(/^https:\/\/github\.com\//i.test(remoteUrl) ? "github" : "git");
-    setRetryAfterLogin(retry); setLoginError(""); setLoginToken(""); setTokenVisible(false); setLoginOpen(true);
+    setRetryAfterLogin(retry); setLoginError(""); setLoginToken("");  setLoginOpen(true);
   };
-  const closeLogin = () => { if (!busy) { setLoginOpen(false); setLoginToken(""); setLoginError(""); setTokenVisible(false); } };
+  const closeLogin = () => { if (!busy) { setLoginOpen(false); setLoginToken(""); setLoginError("");  } };
   const remoteAction = async (action: "connect" | "disconnect" | "sync") => {
     setBusy(true); setRemoteError(""); setRemoteNotice("");
     try {
@@ -968,7 +982,7 @@ function GitPage({ onCommitted }: { onCommitted: () => void }) {
     let verified = false;
     try {
       const next = await api.loginRemote(remoteUrl.trim(), remoteBranch.trim(), loginUsername.trim(), loginToken);
-      verified = true; setRemote(next); setLoginOpen(false); setLoginToken(""); setTokenVisible(false); setRemoteError(""); setRemoteNotice(t("git.loginDone"));
+      verified = true; setRemote(next); setLoginOpen(false); setLoginToken("");  setRemoteError(""); setRemoteNotice(t("git.loginDone"));
       if (retryAfterLogin) { await api.syncRemote(); await load(); onCommitted(); setRemoteNotice(t("git.synced")); }
     } catch (value) {
       if (verified) { setRemoteError(String(value)); setRemote(await api.remoteSettings().catch(() => remote)); }
@@ -1009,12 +1023,7 @@ function GitPage({ onCommitted }: { onCommitted: () => void }) {
           <code className="git-login-repository">{remoteUrl}</code>
           {retryAfterLogin && <p>{t("git.retryLoginHint")}</p>}
           {loginError && <div id="git-login-error" className="inline-error" role="alert"><AlertTriangle size={17} /><span>{loginError}</span></div>}
-          <fieldset className="git-login-platform" disabled={busy}><legend>{t("git.platform")}</legend><div><Button variant={loginPlatform === "github" ? "primary" : "secondary"} aria-pressed={loginPlatform === "github"} onClick={() => setLoginPlatform("github")}>GitHub</Button><Button variant={loginPlatform === "git" ? "primary" : "secondary"} aria-pressed={loginPlatform === "git"} onClick={() => setLoginPlatform("git")}>{t("git.selfHosted")}</Button></div></fieldset>
-          <label className="field"><span>{t("git.username")}</span><input data-autofocus autoComplete="username" disabled={busy} value={loginUsername} aria-describedby={loginError ? "git-login-error" : undefined} onChange={(event) => setLoginUsername(event.target.value)} /></label>
-          <label className="field"><span>{t("git.token")}</span><span className="git-token-input"><input type={tokenVisible ? "text" : "password"} autoComplete="off" spellCheck={false} disabled={busy} value={loginToken} onChange={(event) => setLoginToken(event.target.value)} /><Button variant="secondary" disabled={busy} aria-label={t(tokenVisible ? "git.hideToken" : "git.showToken")} aria-pressed={tokenVisible} onClick={() => setTokenVisible((value) => !value)}><Eye size={16} /></Button></span></label>
-          <p>{t(loginPlatform === "github" ? "git.tokenHintGithub" : "git.tokenHintGit")}</p>
-          <Button variant="secondary" disabled={busy} onClick={() => { void api.openTokenSettings(remoteUrl.trim(), loginPlatform).catch((value) => setLoginError(String(value))); }}>{t("git.tokenSettings")}</Button>
-          <p className="git-login-privacy"><ShieldCheck size={17} />{t("git.credentialHint")}</p>
+          <RepositoryCredentials url={remoteUrl} busy={busy} platform={loginPlatform} onPlatform={setLoginPlatform} username={loginUsername} onUsername={setLoginUsername} token={loginToken} onToken={setLoginToken} onError={setLoginError} errorId={loginError ? "git-login-error" : undefined} />
         </form>
       </Dialog>
       <form className="material commit-card" noValidate onSubmit={commit}>
@@ -1218,7 +1227,16 @@ function ImportSourcePicker({ items, available, selected, source, onSource, onSe
   </section>;
 }
 
-function Init({ onDone, recoveryPath }: { onDone: (count: number) => void; recoveryPath?: string }) {
+function Init({ onDone, recoveryPath }: { onDone: (count: number, restored?: boolean) => void; recoveryPath?: string }) {
+  const [mode, setMode] = useState<"choose" | "local" | "remote">("choose");
+  const [url, setUrl] = useState("");
+  const [branch, setBranch] = useState("");
+  const [auth, setAuth] = useState<"token" | "system">("token");
+  const [platform, setPlatform] = useState<"github" | "git">("github");
+  const [username, setUsername] = useState("");
+  const [token, setToken] = useState("");
+  const restoreForm = useRef<HTMLFormElement>(null);
+  const [serverFailure, setServerFailure] = useState(false);
   const [items, setItems] = useState<ScanItem[] | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
@@ -1231,11 +1249,14 @@ function Init({ onDone, recoveryPath }: { onDone: (count: number) => void; recov
   const visibleScanItems = items?.filter((item) => item.kind === scanKind && (scanSource === "all" || item.source === scanSource)) ?? [];
   const visibleImportableItems = visibleScanItems.filter((item) => item.importable);
   const visibleSelectedCount = visibleImportableItems.filter((item) => selected.has(item.id)).length;
+  useEffect(() => {
+    if (mode === "remote" && serverFailure && error && !busy) document.getElementById("init-error")?.focus();
+  }, [mode, serverFailure, error, busy]);
 
   const scan = async () => {
     if (pending.current) return;
     pending.current = true;
-    setBusy(true); setError("");
+    setMode("local"); setBusy(true); setError("");
     try { setItems(await api.scan()); setSelected(new Set()); setScanSource("all"); } catch (value) { setError(String(value)); } finally { pending.current = false; setBusy(false); }
   };
   const finish = async () => {
@@ -1245,6 +1266,28 @@ function Init({ onDone, recoveryPath }: { onDone: (count: number) => void; recov
     try { const imported = await api.finishInit([...selected]); onDone(imported.length); } catch (value) {
       const message = String(value); setError(message); if (message.includes("incomplete Canonical")) setRecover(true);
     } finally { pending.current = false; setBusy(false); }
+  };
+  const back = () => {
+    if (pending.current) return;
+    setMode("choose"); setItems(null); setToken(""); setUsername(""); setSelected(new Set()); setError("");
+  };
+  const restore = async (event: FormEvent) => {
+    event.preventDefault();
+    if (pending.current) return;
+    setServerFailure(false);
+    const useToken = auth === "token" && url.trim().startsWith("https://");
+    if (!url.trim() || (useToken && (!username.trim() || !token.trim()))) {
+      setError(t("init.restoreRequired"));
+      restoreForm.current?.querySelector<HTMLInputElement>(!url.trim() ? "input[name=repository]" : !username.trim() ? "input[autocomplete=username]" : "input[autocomplete=off]")?.focus();
+      return;
+    }
+    if (useToken && platform === "github" && !/^https:\/\/github\.com\//i.test(url.trim())) { setError(t("git.tokenHintGithub")); return; }
+    pending.current = true; setBusy(true); setError("");
+    try {
+      const result = await api.restoreLibrary(url.trim(), branch.trim(), useToken ? username.trim() : undefined, useToken ? token : undefined);
+      setToken(""); onDone(result.imported, true);
+    } catch (value) { setServerFailure(true); setError(String(value)); }
+    finally { pending.current = false; setBusy(false); }
   };
   const discard = async () => {
     if (pending.current) return;
@@ -1260,24 +1303,38 @@ function Init({ onDone, recoveryPath }: { onDone: (count: number) => void; recov
         <header className="init-topbar">
           <span className="brand__mark"><img src={agentHubLogo} alt="" /></span>
           <span><strong>AgentHub</strong><small>FIRST RUN</small></span>
-          <span className="init-step">{items === null ? "01" : "02"} / 02</span>
+          <span className="init-step">{mode === "choose" || (mode === "local" && items === null) ? "01" : "02"} / 02</span>
         </header>
-        <PageHeader eyebrow="LIBRARY SETUP" title={t("init.title")} subtitle={t("init.subtitle")} />
+        <PageHeader eyebrow="LIBRARY SETUP" title={t(mode === "remote" ? "init.restoreTitle" : mode === "choose" ? "init.welcome" : "init.title")} subtitle={t(mode === "remote" ? "init.restoreHint" : mode === "choose" ? "init.chooseHint" : "init.subtitle")} />
         {recoveryPath && <div className="warning-banner" role="status"><ShieldCheck size={17} /><span>{t("settings.recoveryLocation")} <code>{recoveryPath}</code></span></div>}
-        <div className="init-progress" aria-hidden="true"><i className={items === null ? "is-current" : "is-done"} /><i className={items !== null ? "is-current" : ""} /></div>
+        <div className="init-progress" aria-hidden="true"><i className={mode === "remote" || items !== null ? "is-done" : "is-current"} /><i className={mode === "remote" || items !== null ? "is-current" : ""} /></div>
 
-        {error && (
-          <div className="inline-error" role="alert">
+        {error && mode !== "remote" && (
+          <div id="init-error" className="inline-error" role="alert">
             <Activity size={18} /><span><strong>{t("toast.failed")}</strong>{error}</span>
             {error.includes("incomplete Canonical") && <Button variant="danger" onClick={() => setRecover(true)}>{t("init.recover")}</Button>}
           </div>
         )}
 
-        {items === null ? (
+        {mode === "remote" ? <form ref={restoreForm} className="git-login-form init-restore-form" noValidate onSubmit={(event) => void restore(event)} aria-busy={busy}>
+          <label className="field"><span>{t("git.remoteUrl")}</span><input name="repository" autoFocus value={url} disabled={busy} placeholder="https://github.com/user/agenthub.git" aria-invalid={Boolean(error)} aria-describedby={error ? "init-error" : "restore-scope"} onChange={(event) => { const value = event.target.value; setUrl(value); setToken(""); setPlatform(/^https:\/\/github\.com\//i.test(value.trim()) ? "github" : "git"); setError(""); }} /></label>
+          <label className="field"><span>{t("git.remoteBranch")}</span><input value={branch} disabled={busy} placeholder={t("init.branchAuto")} aria-describedby="restore-branch-hint" onChange={(event) => setBranch(event.target.value)} /></label>
+          <p id="restore-branch-hint">{t("init.branchHint")}</p>
+          {url.trim().startsWith("https://") && <fieldset className="git-login-platform" disabled={busy}><legend>{t("init.authentication")}</legend><div><Button variant={auth === "token" ? "primary" : "secondary"} aria-pressed={auth === "token"} onClick={() => setAuth("token")}>{t("git.token")}</Button><Button variant={auth === "system" ? "primary" : "secondary"} aria-pressed={auth === "system"} onClick={() => { setAuth("system"); setToken(""); }}>{t("init.systemAuth")}</Button></div></fieldset>}
+          {url.trim().startsWith("https://") && auth === "token" ? <RepositoryCredentials url={url} busy={busy} platform={platform} onPlatform={setPlatform} username={username} onUsername={setUsername} token={token} onToken={setToken} onError={setError} errorId={error ? "init-error" : undefined} /> : <p>{t("git.authHint")}</p>}
+          <p id="restore-scope">{t("init.restoreScope")}</p>
+          {error && <div id="init-error" className="inline-error" role="alert" tabIndex={-1}><Activity size={18} /><span><strong>{t("toast.failed")}</strong>{error}</span></div>}
+          {busy && <p role="status">{t("init.restoring")}</p>}
+          <div className="remote-actions"><Button variant="secondary" disabled={busy} onClick={back}>{t("init.back")}</Button><Button type="submit" disabled={busy}>{busy ? <RefreshCw className="spin" size={17} /> : <Cloud size={17} />}{t("init.restoreAction")}</Button></div>
+        </form> : mode === "choose" ? <div className="init-choices">
+          <article><Sparkles size={26} /><h2>{t("init.newLibrary")}</h2><p>{t("init.newHint")}</p><Button disabled={busy} onClick={() => void scan()}><ArrowRight size={17} />{t("init.scan")}</Button><Button variant="quiet" disabled={busy} onClick={() => void finish()}>{t("init.emptyLibrary")}</Button></article>
+          <article><Cloud size={26} /><h2>{t("init.existingLibrary")}</h2><p>{t("init.existingHint")}</p><Button variant="secondary" disabled={busy} onClick={() => { setMode("remote"); setError(""); }}>{t("init.restoreTitle")}</Button></article>
+        </div> : items === null ? (
           <div className="init-intro">
             <div className="init-orbit" aria-hidden="true"><span><Sparkles /></span><i /><i /><i /></div>
             <div><h2>{t("init.scan")}</h2><p>{t("init.subtitle")}</p></div>
             <Button disabled={busy} onClick={scan}>{busy ? <RefreshCw className="spin" size={17} /> : <ArrowRight size={17} />} {busy ? t("common.loading") : t("init.scan")}</Button>
+            <Button variant="quiet" disabled={busy} onClick={back}>{t("init.back")}</Button>
           </div>
         ) : (
           <section className="scan-results">
@@ -1318,7 +1375,7 @@ function Init({ onDone, recoveryPath }: { onDone: (count: number) => void; recov
                 );
               })}
             </div>
-            <footer className="scan-footer"><span>{selected.size} / {importableItems.length}</span><Button disabled={busy} onClick={finish}>{busy ? <RefreshCw className="spin" size={17} /> : <ArrowRight size={17} />} {busy ? t("init.importing") : t("init.import")}</Button></footer>
+            <footer className="scan-footer"><Button variant="quiet" disabled={busy} onClick={back}>{t("init.back")}</Button><span>{selected.size} / {importableItems.length}</span><Button disabled={busy} onClick={finish}>{busy ? <RefreshCw className="spin" size={17} /> : <ArrowRight size={17} />} {busy ? t("init.importing") : t("init.import")}</Button></footer>
           </section>
         )}
       </section>

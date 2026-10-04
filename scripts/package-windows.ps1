@@ -15,7 +15,7 @@ if ([System.Environment]::OSVersion.Platform -ne [System.PlatformID]::Win32NT) {
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $repoRoot
 
-foreach ($command in @("git", "cargo", "pnpm")) {
+foreach ($command in @("git", "cargo", "pnpm", "python")) {
     if (-not (Get-Command $command -ErrorAction SilentlyContinue)) {
         throw "Required command is unavailable: $command"
     }
@@ -43,6 +43,8 @@ New-Item -ItemType Directory -Force -Path $sidecarDir | Out-Null
 $cliBinary = Join-Path $repoRoot "target/release/agenthub.exe"
 $sidecarBinary = Join-Path $sidecarDir "agenthub-x86_64-pc-windows-msvc.exe"
 Copy-Item $cliBinary $sidecarBinary -Force
+python scripts/prepare-windows-resources.py
+if ($LASTEXITCODE -ne 0) { throw "AgentHub resource ownership preparation failed" }
 
 $bundleArgs = if ($Bundle -eq "all") { "nsis,msi" } else { $Bundle }
 pnpm tauri build --bundles $bundleArgs

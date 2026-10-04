@@ -29,14 +29,14 @@ const messages = {
 } as const;
 const extraMessages: Record<string, Record<string, unknown>> = {
   "zh-CN": {
-    inventory: { scanImport: "扫描并导入", scanImportTitle: "从工具导入", scanImportBody: "重新扫描用户级全局位置。只把你选择的新内容复制进 AgentHub 库；相同内容会自动去重，工具不会被修改。", importScanned: "导入所选", importingScan: "正在安全导入…", alreadyCanonical: "库中已有相同内容", scanImported: "项已导入", scanSkipped: "项重复已跳过", scanAutoFailed: "个自动同步目标失败" },
+    inventory: { skillChanges: "项工具侧 Skill 内容有变化", checkingSkills: "正在检查工具侧 Skill…", skillCheckFailed: "部分 Skill 未能完成检查，请重试。", skillCheckUnavailable: "项资源无法读取", reviewSkillChanges: "查看 Skill 变化", skillChangeImportHint: "这些工具中的 Skill 与 AgentHub 库不同。选择要导入的副本；原项会保留，修改后的内容作为新条目加入库。导入后是否同步到工具遵循设置中的导入同步选项。", scanImport: "扫描并导入", scanImportTitle: "从工具导入", scanImportBody: "重新扫描用户级全局位置。只把你选择的新内容复制进 AgentHub 库；相同内容会自动去重，工具不会被修改。", importScanned: "导入所选", importingScan: "正在安全导入…", alreadyCanonical: "库中已有相同内容", scanImported: "项已导入", scanSkipped: "项重复已跳过", scanAutoFailed: "个自动同步目标失败" },
     sync: { agentsHint: "共享 Skills 目录会被支持 Agent Skills 的多个工具读取；选中管理且清空列表即可显式清空该目录。", strictActive: "强制覆盖已开启", clearManaged: "清空受管域", notManaged: "不管理", cliManaged: "CLI 管理", manageDomain: "管理这个资源类别", emptyMeansClear: "选中管理但不选资源时，将清空目标对应资源类别", domainUntouched: "不读取、不写入该资源类别", rulesIncludedHint: "用全部 AgentHub 库 Rules 重建目标规则域", claudePluginConstraint: "Claude Code 的插件库由官方 plugin CLI 管理。v0.1 会保留 ~/.claude/plugins 并跳过该域，避免破坏登录、市场和已安装插件状态。", codexPluginConstraint: "Codex 插件由个人 marketplace、安装缓存与配置共同管理。v0.1 会保留这些状态并跳过插件域，避免用目录覆盖破坏市场与安装记录。" },
     settings: { coverageTitle: "覆盖策略", coverageHint: "选择让 AgentHub 库覆盖全部可写能力，还是只管理你明确选择的资源类别。", strict: "强制覆盖", scoped: "选择性管理", strictOverwrite: "AgentHub 强制覆盖所有可写资源类别", strictOverwriteHint: "下次预览或自动同步会使用全部 AgentHub 库能力；工具额外内容会删除。", syncAfterImport: "导入后自动同步到工具", syncAfterImportHint: "导入先写入 AgentHub 库，再按已启用目标的保存范围同步；关闭时只导入，不修改任何工具。", planGuard: "手动同步仍需预览确认", backupGuard: "每次写入仍先备份并验证", vendorGuard: "厂商、组织与只读能力始终保留" },
   },
   en: {
     nav: { hosts: "Tool resources" },
     hosts: { title: "Tool resources", subtitle: "Inspect user-level capabilities in each tool, distinguish library matches from host content, and safely clean writable resources.", rescan: "Rescan", chooseTarget: "Choose a host", scanning: "Reading host resources…", resources: "resources", canonicalMatch: "library match", hostOnly: "Host only", constraint: "Protected constraint", legendHint: "Relationship labels describe the current match; they do not claim file ownership.", canonicalId: "library ID", notCanonical: "No corresponding AgentHub content", empty: "No resources found", emptyHint: "This user-level host capability domain is empty.", selected: "selected", cleanupHint: "Affected paths are backed up first; library is unchanged.", deleteSelected: "Delete selected host resources", deleteTitle: "Delete these host resources?", deleteBody: "AgentHub rescans and backs up every affected path, then deletes only the listed resources. Failure triggers an automatic restore attempt.", deleteAction: "Back up and delete", driftWarning: "This includes library matches. Deletion creates drift, and automatic sync may recreate them after the next AgentHub mutation.", deleted: "host resources deleted and backed up", selectUnimported: "Select everything not in AgentHub", noUnimported: "No deletable resources outside AgentHub", clearSelection: "Clear selection", cleanupAck: "I have reviewed these resources and confirm deleting them from this tool (restorable from backup)", relations: { canonical_match: "library match", host_only: "Host only", constraint: "Protected" }, constraints: { claude_plugins_cli_managed: "Claude Code plugins are managed by the official CLI; raw directory deletion is disabled.", codex_plugins_cli_managed: "Codex marketplace and cache state are CLI-managed; raw directory deletion is disabled." } },
-    inventory: { scanImport: "Scan & import", scanImportTitle: "Import back from hosts", scanImportBody: "Rescan user-global locations. Only selected new content is copied into library; identical content is deduplicated and hosts are never modified.", importScanned: "Import selected", importingScan: "Importing safely…", alreadyCanonical: "Identical content is already library", scanImported: "imported", scanSkipped: "duplicates skipped", scanAutoFailed: "automatic targets failed" },
+    inventory: { skillChanges: "tool Skill copies differ from the library", checkingSkills: "Checking tool Skills…", skillCheckFailed: "Some Skills could not be checked. Retry to refresh.", skillCheckUnavailable: "resources could not be read", reviewSkillChanges: "Review Skill changes", skillChangeImportHint: "These tool Skills differ from the library. Select copies to import; originals are retained and changed content is added as separate entries. The sync-after-import setting controls subsequent tool writes.", scanImport: "Scan & import", scanImportTitle: "Import back from hosts", scanImportBody: "Rescan user-global locations. Only selected new content is copied into library; identical content is deduplicated and hosts are never modified.", importScanned: "Import selected", importingScan: "Importing safely…", alreadyCanonical: "Identical content is already library", scanImported: "imported", scanSkipped: "duplicates skipped", scanAutoFailed: "automatic targets failed" },
     sync: { agentsHint: "This shared Skills directory is loaded by multiple Agent Skills clients. Manage it with an empty selection to explicitly clear it.", strictActive: "Strict overwrite on", clearManaged: "Clear managed domains", notManaged: "Unmanaged", cliManaged: "CLI managed", manageDomain: "Manage this domain", emptyMeansClear: "A managed domain with no selected resources is cleared on the target", domainUntouched: "This domain is neither read nor written", rulesIncludedHint: "Rebuild the target Rules domain from every library Rule", claudePluginConstraint: "Claude Code's plugin store is managed by the official plugin CLI. v0.1 preserves ~/.claude/plugins and skips this domain to protect login, marketplace, and installed-plugin state.", codexPluginConstraint: "Codex plugins span a personal marketplace, install cache, and configuration. v0.1 preserves that state and skips the plugin domain instead of corrupting marketplace records with a directory overwrite." },
     settings: { coverageTitle: "Coverage policy", coverageHint: "Choose whether AgentHub is a strict source of truth or manages only explicitly selected domains.", strict: "Strict overwrite", scoped: "Scoped management", strictOverwrite: "Force AgentHub over all writable capability domains", strictOverwriteHint: "The next Plan or automatic sync uses every library capability and deletes extra host content.", syncAfterImport: "Run automatic sync after reverse import", syncAfterImportHint: "Import writes library first, then syncs saved scopes for enabled targets. When off, import never modifies a host.", planGuard: "Manual sync still requires Plan confirmation", backupGuard: "Every write is still backed up and verified", vendorGuard: "Vendor, organization, and read-only capabilities remain protected" },
   },
@@ -160,11 +160,62 @@ const workflowMessages = {
     }
   }
 };
+const bootstrapMessages: Record<string, Record<string, unknown>> = {
+  "zh-CN": {
+    "init": {
+      "welcome": "欢迎使用 AgentHub",
+      "chooseHint": "建立一个新库，或从已有仓库恢复能力和版本记录。",
+      "newLibrary": "新建 AgentHub 库",
+      "newHint": "从本机工具选择要导入的能力，也可以从空库开始。",
+      "existingLibrary": "我已经有 AgentHub 库",
+      "existingHint": "连接 GitHub 或 Gitea，在新设备上恢复已有的能力和历史。",
+      "restoreTitle": "恢复已有 AgentHub 库",
+      "restoreHint": "填写仓库地址并授权访问，直接下载已有内容和版本记录。",
+      "restoreRequired": "请填写仓库地址；使用访问令牌时，还需要用户名和令牌。",
+      "branchAuto": "留空自动选择",
+      "branchHint": "留空时优先使用 agenthub 分支，否则使用仓库默认分支；也可以填写指定分支。",
+      "authentication": "认证方式",
+      "systemAuth": "系统凭据 / SSH",
+      "restoreScope": "仅下载 AgentHub 库和版本，不上传、不修改本机工具。需要已有 AgentHub 格式的仓库；普通 Skills 仓库请先在原设备迁移。",
+      "restoring": "正在认证、下载并校验能力和版本记录，请稍候…",
+      "restoreAction": "认证并恢复能力库",
+      "back": "返回选择",
+      "emptyLibrary": "从空库开始",
+      "restored": "项能力已从仓库恢复"
+    }
+  },
+  "en": {
+    "init": {
+      "welcome": "Welcome to AgentHub",
+      "chooseHint": "Create a new library or restore capabilities and versions from an existing repository.",
+      "newLibrary": "Create an AgentHub library",
+      "newHint": "Choose capabilities from local tools or start with an empty library.",
+      "existingLibrary": "I already have an AgentHub library",
+      "existingHint": "Connect GitHub or Gitea to restore your capabilities and history on this device.",
+      "restoreTitle": "Restore an existing AgentHub library",
+      "restoreHint": "Enter the repository address and authorize access to download its content and versions.",
+      "restoreRequired": "Enter a repository address. Token authentication also requires a username and access token.",
+      "branchAuto": "Leave empty to select automatically",
+      "branchHint": "Prefer the agenthub branch when present, otherwise use the repository default branch. Enter a branch to override.",
+      "authentication": "Authentication method",
+      "systemAuth": "System credentials / SSH",
+      "restoreScope": "Downloads only the library and versions. No upload or tool changes. An AgentHub-format repository is required; migrate a plain Skills repository on the original device first.",
+      "restoring": "Authorizing, downloading and validating capabilities and versions…",
+      "restoreAction": "Authorize and restore library",
+      "back": "Back to choices",
+      "emptyLibrary": "Start with an empty library",
+      "restored": "capabilities restored from repository"
+    }
+  }
+};
 type Locale = keyof typeof messages;
 let locale: Locale = "zh-CN";
 export function setLocale(next: Locale) { locale = next; }
 export function t(path: string): string {
-  let value: unknown = workflowMessages[locale];
+  let value: unknown = bootstrapMessages[locale];
+  for (const part of path.split(".")) value = (value as Record<string, unknown> | undefined)?.[part];
+  if (value !== undefined) return String(value);
+  value = workflowMessages[locale];
   for (const part of path.split(".")) value = (value as Record<string, unknown> | undefined)?.[part];
   if (value !== undefined) return String(value);
   value = extraMessages[locale];

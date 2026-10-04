@@ -5,7 +5,8 @@
     "externalBin": ["binaries/agenthub"],
     "resources": {
       "../skills/agenthub-manager/": "skills/agenthub-manager/",
-      "../scripts/windows-cli.ps1": "windows-cli.ps1"
+      "../scripts/windows-cli.ps1": "windows-cli.ps1",
+      "binaries/windows-resources.json": "windows-resources.json"
     },
     "useLocalToolsDir": true,
     "windows": {

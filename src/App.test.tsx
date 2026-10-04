@@ -2,8 +2,59 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import "@testing-library/jest-dom/vitest";
 import App from "./App";
 import { api, type HostResource } from "./lib/api";
+import { setLocale, t } from "./lib/i18n";
+
+afterEach(() => { vi.restoreAllMocks(); setLocale("zh-CN"); });
 
 describe("AgentHub shell", () => {
+  it("restores without scanning, preserves a failed form and blocks duplicate requests", async () => {
+    const dashboard = { initialized: false, inventory: {}, enabled_targets: [], auto_sync_targets: [], dirty: false, recent_transactions: [] };
+    vi.spyOn(api, "dashboard").mockImplementation(async () => dashboard);
+    vi.spyOn(api, "inventory").mockResolvedValue([]);
+    const scan = vi.spyOn(api, "scan");
+    let resolve: (value: { imported: number; branch: string; recovery_path: string }) => void = () => undefined;
+    const restore = vi.spyOn(api, "restoreLibrary").mockRejectedValueOnce(new Error("Authentication failed")).mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /^恢复已有 AgentHub 库$/ }));
+    fireEvent.change(screen.getByLabelText("远程仓库地址"), { target: { value: "https://github.com/tester/library.git" } });
+    fireEvent.change(screen.getByLabelText("登录用户名"), { target: { value: "tester" } });
+    const token = screen.getByLabelText(/^访问令牌$/);
+    fireEvent.change(token, { target: { value: "fixture-only" } });
+    expect(token).toHaveAttribute("type", "password");
+    const submit = screen.getByRole("button", { name: /^认证并恢复能力库$/ });
+    fireEvent.click(submit);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Authentication failed");
+    expect(token).toHaveValue("fixture-only");
+    fireEvent.click(submit);
+    fireEvent.click(submit);
+    expect(submit).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^返回选择$/ })).toBeDisabled();
+    expect(restore).toHaveBeenCalledTimes(2);
+    expect(scan).not.toHaveBeenCalled();
+    dashboard.initialized = true;
+    await act(async () => { resolve({ imported: 2, branch: "agenthub", recovery_path: "/test/backup" }); });
+    expect(await screen.findByRole("heading", { name: "我的能力库" })).toBeInTheDocument();
+    expect(restore).toHaveBeenCalledWith("https://github.com/tester/library.git", "", "tester", "fixture-only");
+  });
+
+  it("can initialize an empty library without scanning local tools", async () => {
+    vi.spyOn(api, "dashboard").mockResolvedValue({ initialized: false, inventory: {}, enabled_targets: [], auto_sync_targets: [], dirty: false, recent_transactions: [] });
+    const scan = vi.spyOn(api, "scan");
+    const finish = vi.spyOn(api, "finishInit").mockResolvedValue([]);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /^从空库开始$/ }));
+    await waitFor(() => expect(finish).toHaveBeenCalledWith([]));
+    expect(scan).not.toHaveBeenCalled();
+  });
+
+  it("localizes first-run choices and restoration in both supported languages", () => {
+    try {
+      for (const locale of ["zh-CN", "en"] as const) {
+        setLocale(locale);
+        for (const key of ["welcome", "chooseHint", "restoreTitle", "restoreAction", "branchHint", "restoreScope", "restored"]) expect(t(`init.${key}`)).not.toBe(`init.${key}`);
+      }
+    } finally { setLocale("zh-CN"); }
+  });
   it("renders the canonical switchboard and all four domains", async () => {
     render(<App/>);
     expect(await screen.findByRole("heading", { name: "能力管理中心" })).toBeInTheDocument();
@@ -74,7 +125,7 @@ it("requires typed reset confirmation and returns to import initialization", asy
   dashboard.mockResolvedValue({ initialized: false, inventory: {}, enabled_targets: [], auto_sync_targets: [], dirty: false, recent_transactions: [] });
   fireEvent.click(confirm);
   await waitFor(() => expect(reset).toHaveBeenCalledWith("AGENTHUB"));
-  expect(await screen.findByRole("heading", { name: "建立 AgentHub 库" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "欢迎使用 AgentHub" })).toBeInTheDocument();
 });
 
 it("keeps two Cursor and one Codex selections across source filters", async () => {
@@ -219,4 +270,43 @@ it("separates configured repositories from verified access and keeps tokens out 
   expect(JSON.stringify(localStorage)).not.toContain("fixture-token");
   fireEvent.click(screen.getByRole("button", { name: /^仓库登录$/ }));
   expect(screen.getByLabelText(/^访问令牌$/)).toHaveValue("");
+});
+
+it("automatically marks changed Skills and reviews copies without a manual scan", async () => {
+  const item = { id: "changed", kind: "skill", source: "agents", path: "/fixture/.agents/skills/example", digest: "new", selected: false, importable: true } as const;
+  const check = vi.spyOn(api, "checkSkillChanges").mockResolvedValue({ changes: [{ canonical_id: "example", item }], errors: [] });
+  vi.spyOn(api, "inventory").mockResolvedValue([{ id: "example", kind: "skill", display_name: "Example", path: "/fixture/hub/skills/example", digest: "old", compatible_targets: ["agents"] }]);
+  const scan = vi.spyOn(api, "scan");
+  const imported = vi.spyOn(api, "importScanned").mockResolvedValue({ imported: ["example-2"], skipped_duplicates: 0, auto_sync: [] });
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: /我的能力库 · 项工具侧 Skill 内容有变化 1/ }));
+  fireEvent.click(await screen.findByRole("button", { name: "查看 Skill 变化 Example" }));
+  expect(await screen.findByRole("dialog")).toHaveTextContent("原项会保留");
+  expect(scan).not.toHaveBeenCalled();
+  const submit = screen.getByRole("button", { name: "导入所选" });
+  expect(submit).toBeDisabled();
+  fireEvent.click(screen.getByRole("checkbox", { name: /example.*agents/ }));
+  expect(submit).toBeEnabled();
+  check.mockResolvedValue({ changes: [], errors: [] });
+  fireEvent.click(submit);
+  await waitFor(() => expect(imported).toHaveBeenCalledWith(["changed"]));
+  await waitFor(() => expect(screen.queryByRole("button", { name: "查看 Skill 变化 Example" })).not.toBeInTheDocument());
+});
+
+it("throttles navigation and focus checks and retries a partial failure explicitly", async () => {
+  let now = 1000;
+  vi.spyOn(Date, "now").mockImplementation(() => now);
+  const check = vi.spyOn(api, "checkSkillChanges").mockResolvedValue({ changes: [], errors: ["/unreadable/skill"] });
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "我的能力库" }));
+  expect(await screen.findByText("部分 Skill 未能完成检查，请重试。")).toBeInTheDocument();
+  fireEvent.focus(window);
+  expect(check).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole("button", { name: "重试" }));
+  await waitFor(() => expect(check).toHaveBeenCalledWith(true));
+  check.mockResolvedValue({ changes: [], errors: [] });
+  now += 120_001;
+  fireEvent.focus(window);
+  await waitFor(() => expect(check).toHaveBeenCalledTimes(3));
+  expect(screen.queryByText("部分 Skill 未能完成检查，请重试。")).not.toBeInTheDocument();
 });

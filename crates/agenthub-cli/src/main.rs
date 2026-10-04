@@ -20,6 +20,15 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Restore an existing library without uploading or modifying any tool.
+    /// With --username, read the access token from stdin (never from arguments).
+    Bootstrap {
+        url: String,
+        #[arg(long, default_value = "")]
+        branch: String,
+        #[arg(long)]
+        username: Option<String>,
+    },
     Init {
         #[arg(long)]
         import_all: bool,
@@ -150,6 +159,29 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let hub = AgentHub::open_default()?;
     match cli.command {
+        Command::Bootstrap {
+            url,
+            branch,
+            username,
+        } => {
+            let token = if username.is_some() {
+                let mut value = String::new();
+                io::stdin().take(16 * 1024).read_to_string(&mut value)?;
+                Some(value.trim_end_matches(['\r', '\n']).to_owned())
+            } else {
+                None
+            };
+            let paths = hub.paths.clone();
+            drop(hub);
+            let result = agenthub_core::bootstrap::restore(
+                &paths,
+                &url,
+                &branch,
+                username.as_deref(),
+                token.as_deref(),
+            )?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
         Command::Init { import_all, empty } => {
             anyhow::ensure!(
                 !hub.store.initialized()?,
