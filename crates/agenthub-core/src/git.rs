@@ -435,6 +435,31 @@ fn reconcile(root: &Path, url: &str, branch: &str) -> Result<()> {
     Ok(())
 }
 
+// Git for Windows rejects Rust's verbatim canonical-path prefix in clone arguments.
+// Keep canonical paths for filesystem checks; normalize only child-process arguments.
+fn git_path_argument(path: &Path) -> Result<String> {
+    let path = path.to_str().context("invalid Git path")?;
+    #[cfg(windows)]
+    {
+        Ok(windows_git_path(path))
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(path.to_owned())
+    }
+}
+
+#[cfg(any(windows, test))]
+fn windows_git_path(path: &str) -> String {
+    if let Some(unc) = path.strip_prefix(r"\\?\UNC\") {
+        format!("//{}", unc.replace('\\', "/"))
+    } else {
+        path.strip_prefix(r"\\?\")
+            .unwrap_or(path)
+            .replace('\\', "/")
+    }
+}
+
 fn validate_incoming(root: &Path) -> Result<()> {
     let source_root = root.canonicalize()?;
     let stage_root = source_root
@@ -459,8 +484,8 @@ fn validate_incoming(root: &Path) -> Result<()> {
                 "--shared",
                 "--no-checkout",
                 "--",
-                source_root.to_str().context("invalid library path")?,
-                stage_root.to_str().context("invalid staging path")?,
+                &git_path_argument(&source_root)?,
+                &git_path_argument(&stage_root)?,
             ],
         )?;
         run(&stage_root, &["checkout", "--detach", &incoming])?;
@@ -695,6 +720,26 @@ mod tests {
         )
         .unwrap();
     }
+    #[test]
+    fn windows_git_arguments_preserve_drive_unc_and_unicode_paths() {
+        assert_eq!(
+            windows_git_path(r"\\?\C:\Users\技能\library"),
+            "C:/Users/技能/library"
+        );
+        assert_eq!(
+            windows_git_path(r"\\?\UNC\server\share\library"),
+            "//server/share/library"
+        );
+        assert_eq!(
+            windows_git_path(r"C:\Users\with spaces\library"),
+            "C:/Users/with spaces/library"
+        );
+        assert_eq!(
+            windows_git_path(r"\\server\share\library"),
+            "//server/share/library"
+        );
+    }
+
     #[test]
     fn unreadable_saved_credentials_do_not_hide_a_successful_local_commit() {
         let home = TempDir::new().unwrap();
