@@ -182,7 +182,36 @@ pub fn ensure_repo(root: &Path) -> Result<()> {
 pub fn snapshot(root: &Path) -> Result<GitSnapshot> {
     ensure_repo(root)?;
     let head = run(root, &["rev-parse", "--verify", "HEAD"]).ok();
-    let dirty = !run(root, &["status", "--porcelain"])?.is_empty();
+    // Git status can report a stat-only modification after restoring LF bytes
+    // under core.autocrlf=true, even when Git's actual diff is empty.
+    let tracked = if head.is_some() {
+        run(
+            root,
+            &[
+                "diff",
+                "HEAD",
+                "--name-only",
+                "--no-ext-diff",
+                "--no-textconv",
+                "-z",
+            ],
+        )?
+    } else {
+        run(root, &["ls-files", "--cached", "-z"])?
+    };
+    let staged = run(
+        root,
+        &[
+            "diff",
+            "--cached",
+            "--name-only",
+            "--no-ext-diff",
+            "--no-textconv",
+            "-z",
+        ],
+    )?;
+    let untracked = run(root, &["ls-files", "--others", "--exclude-standard", "-z"])?;
+    let dirty = !tracked.is_empty() || !staged.is_empty() || !untracked.is_empty();
     Ok(GitSnapshot { head, dirty })
 }
 pub fn status(root: &Path) -> Result<String> {

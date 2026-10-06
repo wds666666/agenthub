@@ -34,6 +34,29 @@ fn command(hub: &AgentHub, args: &[&str]) {
         .success());
 }
 #[test]
+fn clean_crlf_worktree_is_not_reported_as_a_capability_change() {
+    let (_temp, hub) = fixture();
+    command(&hub, &["config", "core.autocrlf", "true"]);
+    fs::write(hub.paths.skills.join("one/SKILL.md"), "# Original\r\n").unwrap();
+    command(&hub, &["add", "--renormalize", "."]);
+    assert!(!git::snapshot(&hub.paths.root).unwrap().dirty);
+    assert!(versions::changes(&hub.paths).unwrap().is_empty());
+    fs::write(hub.paths.skills.join("one/SKILL.md"), "# Edited\r\n").unwrap();
+    let plan = versions::preview(&hub.paths, VersionAction::Discard).unwrap();
+    let stage = hub.paths.root.join(format!("runtime/version-{}", plan.id));
+    assert_eq!(
+        fs::read_to_string(stage.join("skills/one/SKILL.md")).unwrap(),
+        "# Original\n"
+    );
+    let result = versions::apply(&hub.paths, plan.id, "DISCARD").unwrap();
+    assert!(
+        !result.pending_changes,
+        "{}\n{}",
+        git::status(&hub.paths.root).unwrap(),
+        git::diff(&hub.paths.root).unwrap()
+    );
+}
+#[test]
 fn capability_changes_include_staged_unstaged_new_and_deleted_files() {
     let (_temp, hub) = fixture();
     fs::write(hub.paths.skills.join("one/SKILL.md"), "# Staged\n").unwrap();

@@ -68,8 +68,21 @@ fn lock(paths: &AgentHubPaths) -> Result<fs::File> {
         .write(true)
         .open(&path)?;
     paths::set_private_file(&path)?;
-    file.try_lock()
-        .context("version recovery already in progress")?;
+    // A concurrently spawned Git process may briefly inherit an open lock
+    // before exec closes it. Allow that transient handoff, but reject a real
+    // overlapping recovery without writing anything.
+    let started = std::time::Instant::now();
+    loop {
+        match file.try_lock() {
+            Ok(()) => break,
+            Err(std::fs::TryLockError::WouldBlock)
+                if started.elapsed() < std::time::Duration::from_millis(100) =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Err(error) => return Err(error).context("version recovery already in progress"),
+        }
+    }
     Ok(file)
 }
 fn files(root: &Path) -> Result<BTreeMap<String, String>> {
@@ -230,6 +243,9 @@ fn checkout(paths: &AgentHubPaths, dest: &Path, sha: &str, remote: bool) -> Resu
             &git::git_path_argument(dest)?,
         ],
     )?;
+    // Recovery snapshots must retain stored bytes even when the user's Git
+    // defaults convert text to CRLF on Windows.
+    git::run(dest, &["config", "core.autocrlf", "false"])?;
     git::run(dest, &["checkout", "--detach", sha])?;
     anyhow::ensure!(
         fs::symlink_metadata(dest.join("agenthub.toml"))
@@ -251,25 +267,37 @@ pub fn changes(paths: &AgentHubPaths) -> Result<Vec<CapabilityChange>> {
         .root
         .join(format!("runtime/changes-{}", Uuid::new_v4()));
     let result = (|| {
-        if let Some(head) = snap.head {
-            checkout(paths, &stage, &head, false)?;
+        if let Some(head) = &snap.head {
+            checkout(paths, &stage, head, false)?;
         } else {
             fs::create_dir_all(&stage)?;
         }
-        let before = files(&stage)?;
+        let mut before = files(&stage)?;
         let listed = git::run(
             &paths.root,
-            &[
-                "ls-files",
-                "--cached",
-                "--others",
-                "--exclude-standard",
-                "-z",
-            ],
+            &["ls-files", "--others", "--exclude-standard", "-z"],
         )?;
         let mut visible: std::collections::BTreeSet<String> =
             listed.split('\0').map(str::to_owned).collect();
-        visible.extend(before.keys().cloned());
+        if snap.head.is_some() {
+            let changed = git::run(
+                &paths.root,
+                &[
+                    "diff",
+                    "HEAD",
+                    "--name-only",
+                    "--no-ext-diff",
+                    "--no-textconv",
+                    "-z",
+                ],
+            )?;
+            visible.extend(changed.split('\0').map(str::to_owned));
+        } else {
+            visible.extend(before.keys().cloned());
+            let tracked = git::run(&paths.root, &["ls-files", "--cached", "-z"])?;
+            visible.extend(tracked.split('\0').map(str::to_owned));
+        }
+        before.retain(|name, _| visible.contains(name));
         let after = files_filtered(&paths.root, Some(&visible))?;
         Ok(group(&before, &after, &stage, &paths.root))
     })();
