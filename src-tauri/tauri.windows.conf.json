@@ -4,7 +4,6 @@
     "targets": ["nsis", "msi"],
     "externalBin": ["binaries/agenthub"],
     "resources": {
-      "../skills/agenthub-manager/": "skills/agenthub-manager/",
       "../scripts/windows-cli.ps1": "windows-cli.ps1",
       "binaries/windows-resources.json": "windows-resources.json"
     },
@@ -26,7 +25,7 @@
         "startMenuFolder": "AgentHub"
       },
       "wix": {
-        "fragmentPaths": ["windows/cli.wxs"],
+        "fragmentPaths": ["windows/cli.wxs", "binaries/msi-preserve.wxs"],
         "componentGroupRefs": ["AgentHubCommandIntegration"]
       }
     }

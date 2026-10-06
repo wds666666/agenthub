@@ -19,6 +19,7 @@ Current MCP env/headers can contain strings. Prefer environment placeholders suc
 - `agenthub git remote-status`
 - `agenthub git connect <https-or-ssh-url> --branch <branch>`
 - `agenthub git sync`
+- `agenthub git receive` (download/validate only; clean working tree, no push or host delivery)
 - `agenthub git disconnect`
 
 Desktop **Versions** presents connection and retry state. Connect tests read access. Author name/email identify a commit; they do not sign into a remote provider. Use the desktop sign-in dialog for GitHub or self-hosted Git/Gitea; encrypted local tokens are shared with CLI and never versioned. Existing system Git credentials and SSH remain available. Interactive prompts and Windows console windows stay disabled. Read verification does not prove push permission. A configured URL without verification is not an authenticated connection.
@@ -30,3 +31,5 @@ Read [conflict resolution](conflicts.md) for an Agent-assisted merge using exact
 No polling or automatic host writes occur on remote reception. On another device, initialize/save its local library, connect the same dedicated repository/branch, synchronize, then review a host Plan before applying. Resource content and Git history are portable; each device chooses its own hosts and scope.
 
 Bulk library deletion archives uncommitted content at `backups/library-delete-<uuid>/<kind>/<id>`. This is a local file recovery copy, not a host transaction rollback entry. Committed content can also be recovered through Git; use a reviewed restore into new working-tree changes, never `reset --hard` as routine recovery.
+
+Pending content blocks ordinary remote sync. Save once to preserve it before merge/upload, or explicitly review [version recovery](versions.md) to discard it or replace it with cloud content. Never auto-stash or silently choose a side.

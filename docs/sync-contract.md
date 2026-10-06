@@ -12,17 +12,17 @@ If an automatic run has no steps, it returns `changed=false` without persisting 
 
 ## Deterministic Plan
 
-A Plan records Canonical digest, Git HEAD, dirty state, target, selected Skills/Plugins/MCP IDs, the Rules toggle, expected projection digest, warnings and ordered file steps. Steps classify create, update, replace, delete, skip and constraint. Secrets are redacted before persistence, logs or JSON output. Apply re-generates the same selected projection and blocks if the selection or any other Plan input has drifted.
+A Plan records Canonical digest, Git HEAD, dirty state, target, selected Skills/Plugins/MCP IDs, the individual Rules, expected projection digest, warnings and ordered file steps. Steps classify create, update, replace, delete, skip and constraint. Secrets are redacted before persistence, logs or JSON output. Apply re-generates the same selected projection and blocks if the selection or any other Plan input has drifted.
 
 Plan presentation must expose a capability-level change list before raw file details. For Skills, Plugins and individually projected Rules this names the exact Canonical or host capability ID and whether it will be created, replaced or deleted, with the affected file count. Combined host documents such as an MCP collection may be labeled as a writable-domain replacement when the adapter cannot safely attribute a file diff to one server. Raw paths remain a secondary expandable diagnostic view.
 
 ## Explicit sync scope
 
-Target Sync begins with a scope selector. Skills, Plugins and MCP servers are selected by Canonical ID; Rules are selected with a target-wide toggle because some adapters render them as a combined file or plugin. A selected domain is replaced from its selected Canonical subset, so host extras in that domain appear as deletes. A domain with no selected resources is omitted from the projection and is not touched. Rules disabled omits the Rules projection entirely. The selection snapshot is persisted in the Plan and is part of the Apply contract.
+Target Sync begins with a scope selector. Skills, Plugins and MCP servers are selected by Canonical ID; Rules are selected by individual Canonical ID even when an adapter renders them as a combined file or plugin. Preserve mode updates only selected capabilities and retains all host extras. Replace mode reconciles the selected category to the selected subset and previews host-extra deletions. An unmanaged category is not touched. An empty managed category retains content in Preserve and explicitly clears writable content in Replace; protected content remains. The selection snapshot is persisted in the Plan and is part of the Apply contract.
 
-Each list domain also carries an explicit managed flag. This separates "do not touch" from "manage with an empty desired set". The latter produces deletion steps and is how a user intentionally clears `~/.agents/skills` or another writable host domain. Legacy selections remain managed whenever they contain selected IDs.
+Each list domain also carries an explicit managed flag. This separates "do not touch" from "manage with an empty desired set". In Replace mode the latter produces deletion steps and is how a user intentionally clears `~/.agents/skills` or another writable host domain. Legacy selections remain managed whenever they contain selected IDs.
 
-The automatic-sync profile uses the same visible selector. The UI shows the saved target scope and requires the user to review named Skills, Plugins, MCP servers and the Rules toggle when enabling or changing it; automatic sync is never represented as an opaque all-capabilities switch.
+The automatic-sync profile uses the same visible selector. The UI shows the saved target scope and requires the user to review named Skills, Plugins, MCP servers and the individual Rules when enabling or changing it; automatic sync is never represented as an opaque all-capabilities switch.
 
 CLI `plan <target> --selection <json-file> --json` accepts the same selection, rejects unknown fields and missing/duplicate resource IDs, and persists it in the Plan. Omitting `--selection` retains full compatible scope. CLI initialization cannot overwrite an initialized library; whole-scan first import uses atomic staging and skips nonimportable discoveries.
 
@@ -30,10 +30,10 @@ CLI `plan <target> --selection <json-file> --json` accepts the same selection, r
 
 | Target | Skills | MCP | Plugins | Rules |
 | --- | --- | --- | --- | --- |
-| Shared Agents | replace or explicitly clear `~/.agents/skills` | unsupported | unsupported | unsupported |
-| Cursor | replace `~/.cursor/skills` | replace `mcpServers`, preserve other JSON | replace writable local plugins | generated global plugin |
-| Codex | replace `~/.codex/skills` | replace `mcp_servers`, preserve other TOML | preserve CLI/marketplace-managed state and report v0.1 constraint | replace global `AGENTS.md` |
-| Claude | replace writable `~/.claude/skills` except reserved dirs | replace user-scope servers | preserve CLI-managed plugin store and report v0.1 constraint | replace `~/.claude/rules` |
+| Shared Agents | merge selected or explicitly replace `~/.agents/skills` | unsupported | unsupported | unsupported |
+| Cursor | merge selected or replace `~/.cursor/skills` | merge selected or replace `mcpServers`, preserve other JSON | merge selected or replace writable local plugins | selected files in generated Rules container |
+| Codex | merge selected or replace `~/.codex/skills` | merge selected or replace `mcp_servers`, preserve other TOML | preserve CLI/marketplace-managed state and report v0.1 constraint | selected identifiable blocks in `AGENTS.md` |
+| Claude | merge selected or replace writable Skills, except reserved dirs | merge selected or replace user-scope servers | preserve CLI-managed plugin store and report v0.1 constraint | merge selected or replace `~/.claude/rules` |
 
 Before writing, the executor resolves all paths and records type, mode, hash and symlink target. It then creates a complete transaction backup, writes the projection, reads the target again and compares it with Expected State. Verification failure automatically restores the backup. Cleanup is manual and warns that rollback ability will be lost.
 
@@ -49,13 +49,13 @@ Rollback never changes Canonical files or Git history. The restored host can the
 
 `scan` is an import discovery operation only before initialization. Afterwards it is a read-only drift audit; it never merges or imports host changes.
 
-The desktop exposes a separate **Scan and import** action after initialization. Discovery is read-only; exact `(kind, digest)` duplicates already in Canonical are disabled, duplicates across hosts are grouped, and only explicit confirmation imports selected candidates. Import is a Canonical mutation; it triggers saved automatic-sync profiles only when the user has enabled the separate “sync after reverse import” policy.
+The desktop exposes a separate **Scan and import** action after initialization. Discovery is read-only; exact normalized portable-content duplicates already in Canonical are disabled, duplicates across hosts are grouped, and only explicit confirmation imports selected candidates. Import is a Canonical mutation; it triggers saved automatic-sync profiles only when the user has enabled the separate “sync after reverse import” policy.
 
 ## Enforcement policy
 
-The default policy is scoped: only explicitly managed domains are replaced. Optional strict-authoritative mode makes every adapter-confirmed writable domain for the selected target managed, including empty domains. It never expands into models, themes, accounts, permissions, cloud-managed capabilities, organization policy, reserved vendor directories, or undocumented plugin storage. Every strict write still uses Plan, backup, Apply and verification.
+The default mode is Preserve: only explicitly selected capabilities are added/replaced, and every unselected resource remains. Replace reconciles only explicitly managed categories; it never expands selection into other categories or automatically includes new library items. Changing the default in Settings does not change saved profiles. Legacy profiles are paused for review. Protected vendor stores, organization policy and undocumented plugin storage remain excluded.
 
-Post-initialization reverse import is a separate user action. Exact `(kind, digest)` duplicates are skipped and all selected items are staged and validated before Canonical activation. By default it does not write back to any host. Users may explicitly enable “sync after reverse import”; when enabled, only already-enabled automatic-sync profiles run, and unchanged targets create no transaction.
+Post-initialization reverse import is a separate user action. Exact normalized portable-content duplicates are skipped and all selected items are staged and validated before Canonical activation. By default it does not write back to any host. Users may explicitly enable “sync after reverse import”; when enabled, only already-enabled automatic-sync profiles run, and unchanged targets create no transaction.
 
 ## Host inventory and cleanup
 
@@ -84,3 +84,15 @@ GitHub and self-hosted Git/Gitea support HTTPS username/access-token sign-in. Lo
 The initialized desktop checks existing library Skill IDs in Shared Agents, Cursor, Codex and Claude Code automatically while visible, with a two-minute minimum interval. Only ordinary first-level Skill directories are candidates. Compare the complete portable content, including supporting files, using the existing runtime exclusions. Metadata fingerprints cache per-directory digests; unchanged content is rehashed after thirty minutes. Filesystem errors produce a partial-check warning, never a false clean result. The check never imports, writes hosts, commits or accesses the network.
 
 A differing same-ID resource shows a red reminder in library navigation and on the corresponding Skill. Content already present anywhere in the library is excluded, so explicitly importing a changed copy clears its reminder after recheck. Opening a reminder does not mark it resolved. The review dialog shows source and path, leaves selection empty, and uses the existing atomic reverse-import command with stale-result validation. Import retains the original library item and adds the changed content under a unique ID; it is not an in-place update or merge. Existing optional sync-after-import policy remains applicable.
+
+## Selected capability synchronization (current contract)
+
+Preserve is the default: add/replace only explicitly selected capabilities; leave every unselected host resource intact, including retired selections and library deletions. Replace reconciles only explicitly managed categories to the selected subset. Neither mode expands scope. Rules have individual IDs; creating a rule saves only to Canonical and never distributes it or selects it. Existing selected rules may synchronize on subsequent edits. Old automatic profiles pause for mode/rule-scope review. Package installation supplies Desktop and CLI, with the manager Skill available separately for manual installation.
+
+Discovery uses a shared comparison digest of portable capability content, separate from transaction file digests. MCP compares normalized target-representable configuration, Rules exclude generated wrappers, Plugins compare their complete payload, and Skills retain runtime exclusions. Generated rule containers are identified explicitly. Equal content is blocked from reverse import in the backend as well as the UI; same-name differences remain reviewable. Parsing/identity uncertainty blocks destructive rewriting rather than treating the configuration as empty.
+
+Successful remote synchronization first validates updates in Canonical, then runs enabled device profiles only when library content changed. Saving a version also runs enabled device profiles. Host failures are returned separately from successful library saves or remote updates. `git receive` is a library-only maintenance operation and never writes tools or uploads.
+
+## Version recovery actions
+
+Versions shows unsaved changes grouped by capability (Skills, MCP, Rules, Plugins), with file details separately available. Refresh is read-only. Discard changes restores the last local saved content; Use remote content previews a validated dedicated-repository snapshot and replaces library content only. The remote action does not reset local history, force-push, upload or deliver to hosts: the replacement remains a working-tree change for explicit saving. Both actions require an immutable preview, exact confirmation, private recovery backup including the index, stale-input checks, verification and recovery on failure/interruption. Device state, credentials, Git history and host paths are excluded from replacement. A missing local saved version blocks discard; remote authentication/layout errors do not change local content.

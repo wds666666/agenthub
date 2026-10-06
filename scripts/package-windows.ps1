@@ -81,9 +81,6 @@ if ((Get-PESubsystem (Join-Path $portableDirectory "agenthub-desktop.exe")) -ne 
     (Get-PESubsystem (Join-Path $portableDirectory "agenthub.exe")) -ne 3) {
     throw "Portable desktop and CLI must remain separate executables with the correct subsystem"
 }
-Copy-Item "skills/agenthub-manager/scripts/agenthub.ps1" $portableDirectory
-New-Item -ItemType Directory -Path (Join-Path $portableDirectory "skills") | Out-Null
-Copy-Item "skills/agenthub-manager" (Join-Path $portableDirectory "skills") -Recurse
 Copy-Item "docs/portable-windows.md" (Join-Path $portableDirectory "README.md")
 Copy-Item "LICENSE" $portableDirectory
 $portableArchive = Join-Path $repoRoot "target/release/bundle/AgentHub_${version}_windows-x64-portable.zip"

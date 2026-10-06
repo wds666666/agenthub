@@ -103,7 +103,14 @@ pub(crate) fn inspect(source: &Path) -> Result<SkillContent> {
     for entry in &entries {
         if entry.file_type().is_file() {
             let relative = entry.path().strip_prefix(source)?;
-            hasher.update(relative.to_string_lossy().as_bytes());
+            hasher.update(
+                relative
+                    .components()
+                    .map(|p| p.as_os_str().to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join("/")
+                    .as_bytes(),
+            );
             hasher.update(
                 fs::read(entry.path())
                     .with_context(|| format!("read skill file {}", relative.display()))?,

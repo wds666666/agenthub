@@ -8,7 +8,7 @@ use agenthub_core::{
     },
     planner, scanner,
     skill_changes::{SkillChangeCache, SkillChangeReport},
-    transaction, AgentHub,
+    transaction, versions, AgentHub,
 };
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -163,7 +163,7 @@ fn save_rule(rule: RuleDocument, create: bool) -> Result<CapabilityMutationResul
     if !h.store.initialized().map_err(err)? {
         return Err("AgentHub must be initialized before adding rules".into());
     }
-    let result = canonical::save_rule(&h.paths, &rule, create).map_err(err);
+    let result = transaction::save_rule(&h.paths, &h.store, &rule, create).map_err(err);
     trace(
         "rules",
         if result.is_ok() {
@@ -173,17 +173,9 @@ fn save_rule(rule: RuleDocument, create: bool) -> Result<CapabilityMutationResul
         },
         format_args!("id={}", rule.id),
     );
-    let capability = result?;
-    let auto_sync = if h
-        .store
-        .policy_settings()
-        .map_err(err)?
-        .sync_after_reverse_import
-    {
-        transaction::run_auto_sync(&h.paths, &h.store).map_err(err)?
-    } else {
-        Vec::new()
-    };
+    let result = result?;
+    let capability = result.capability;
+    let auto_sync = result.auto_sync;
     trace(
         "rules",
         "auto_sync_complete",
@@ -336,13 +328,13 @@ fn import_scanned(selected_ids: Vec<String>) -> Result<ScanImportResult, String>
     let canonical_digests: std::collections::BTreeSet<_> = canonical::inventory(&h.paths)
         .map_err(err)?
         .into_iter()
-        .map(|item| (item.kind, item.digest))
+        .map(|item| (item.kind, item.comparison_digest))
         .collect();
     let mut seen_digests = canonical_digests.clone();
     let mut skipped_duplicates = 0;
     for item in &mut items {
         let requested_item = requested.contains(&item.id);
-        let identity = (item.kind, item.digest.clone());
+        let identity = (item.kind, item.comparison_digest.clone());
         item.selected = requested_item && item.importable && seen_digests.insert(identity);
         if requested_item && !item.selected {
             skipped_duplicates += 1;
@@ -352,7 +344,16 @@ fn import_scanned(selected_ids: Vec<String>) -> Result<ScanImportResult, String>
     let imported = canonical::import_scan_items_atomic(&h.paths, &items)
         .map_err(|error| import_error("reverse_import", error))?;
     skipped_duplicates += selected_count.saturating_sub(imported.len());
-    let auto_sync = transaction::run_auto_sync(&h.paths, &h.store).map_err(err)?;
+    let auto_sync = if !imported.is_empty()
+        && h.store
+            .policy_settings()
+            .map_err(err)?
+            .sync_after_reverse_import
+    {
+        transaction::run_auto_sync(&h.paths, &h.store).map_err(err)?
+    } else {
+        Vec::new()
+    };
     Ok(ScanImportResult {
         imported,
         skipped_duplicates,
@@ -455,12 +456,6 @@ fn set_target(target: Target, enabled: bool) -> Result<(), String> {
 fn create_plan(target: Target, selection: Option<SyncSelection>) -> Result<Plan, String> {
     trace("plan", "create_start", target.as_str());
     let h = hub()?;
-    let mut selection = selection;
-    if h.store.policy_settings().map_err(err)?.strict_authoritative {
-        selection
-            .get_or_insert_with(SyncSelection::default)
-            .authoritative = true;
-    }
     let p = planner::create_with_selection(&h.paths, target, selection.as_ref()).map_err(err)?;
     h.store.save_plan(&p).map_err(err)?;
     trace(
@@ -513,6 +508,7 @@ fn set_auto_sync(
     target: Target,
     selection: SyncSelection,
     enabled: bool,
+    reviewed_plan_id: Option<String>,
 ) -> Result<AutoSyncUpdateResult, String> {
     trace(
         "auto_sync",
@@ -520,11 +516,8 @@ fn set_auto_sync(
         format_args!("target={} enabled={enabled}", target.as_str()),
     );
     let h = hub()?;
-    let mut selection = selection;
-    if h.store.policy_settings().map_err(err)?.strict_authoritative {
-        selection.authoritative = true;
-    }
     let profile = AutoSyncProfile {
+        needs_review: false,
         target,
         enabled,
         selection,
@@ -544,8 +537,40 @@ fn set_auto_sync(
     if !has_scope {
         return Err("select at least one capability before enabling automatic sync".into());
     }
-    let initial_sync = transaction::sync_once(&h.paths, &h.store, target, Some(&profile.selection))
-        .map_err(err)?;
+    let initial_sync = if profile.selection.mode == agenthub_core::models::SyncMode::Replace {
+        let id = reviewed_plan_id
+            .ok_or("preview replacement deletions before enabling automatic sync")?;
+        let plan = h
+            .store
+            .plan(&id)
+            .map_err(err)?
+            .ok_or("reviewed Plan not found")?;
+        if plan.target != target || plan.selection.as_ref() != Some(&profile.selection) {
+            return Err("reviewed scope changed; preview again".into());
+        }
+        let fresh = planner::create_with_selection(&h.paths, target, Some(&profile.selection))
+            .map_err(err)?;
+        if fresh.canonical_digest != plan.canonical_digest
+            || fresh.git != plan.git
+            || fresh.expected_digest != plan.expected_digest
+            || fresh.steps != plan.steps
+        {
+            return Err("reviewed Plan changed; preview again".into());
+        }
+        let changed = !plan.steps.is_empty();
+        let transaction = if changed {
+            Some(transaction::apply(&h.paths, &h.store, &plan).map_err(err)?)
+        } else {
+            None
+        };
+        agenthub_core::models::SyncRunResult {
+            changed,
+            plan,
+            transaction,
+        }
+    } else {
+        transaction::sync_once(&h.paths, &h.store, target, Some(&profile.selection)).map_err(err)?
+    };
     h.store.set_auto_sync_profile(&profile).map_err(err)?;
     trace(
         "auto_sync",
@@ -590,6 +615,26 @@ fn rollback_transaction(transaction_id: String) -> Result<Transaction, String> {
     result
 }
 #[tauri::command(async)]
+fn git_changes() -> Result<Vec<versions::CapabilityChange>, String> {
+    let h = hub()?;
+    versions::changes(&h.paths).map_err(err)
+}
+#[tauri::command(async)]
+fn version_recovery_plan(
+    action: versions::VersionAction,
+) -> Result<versions::VersionPreview, String> {
+    let h = hub()?;
+    versions::preview(&h.paths, action).map_err(err)
+}
+#[tauri::command(async)]
+fn version_recovery_apply(
+    plan_id: String,
+    confirmation: String,
+) -> Result<versions::VersionResult, String> {
+    let h = hub()?;
+    versions::apply(&h.paths, plan_id.parse().map_err(err)?, &confirmation).map_err(err)
+}
+#[tauri::command(async)]
 fn git_status() -> Result<String, String> {
     let h = hub()?;
     git::status(&h.paths.root).map_err(err)
@@ -616,7 +661,14 @@ fn git_commit(
     email: Option<String>,
 ) -> Result<git::CommitResult, String> {
     let h = hub()?;
-    git::commit_and_sync(&h.paths.root, &message, name.as_deref(), email.as_deref()).map_err(err)
+    transaction::save_version(
+        &h.paths,
+        &h.store,
+        &message,
+        name.as_deref(),
+        email.as_deref(),
+    )
+    .map_err(err)
 }
 
 #[tauri::command(async)]
@@ -686,9 +738,9 @@ fn disconnect_remote() -> Result<(), String> {
     git::disconnect_remote(&h.paths.root).map_err(err)
 }
 #[tauri::command(async)]
-fn sync_remote() -> Result<(), String> {
+fn sync_remote() -> Result<agenthub_core::models::RemoteSyncResult, String> {
     let h = hub()?;
-    git::sync_remote(&h.paths.root).map_err(err)
+    transaction::sync_remote(&h.paths, &h.store).map_err(err)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -748,6 +800,9 @@ pub fn run() {
             set_auto_sync,
             transaction_history,
             rollback_transaction,
+            git_changes,
+            version_recovery_plan,
+            version_recovery_apply,
             git_status,
             git_diff,
             git_identity,

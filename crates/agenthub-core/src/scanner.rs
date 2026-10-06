@@ -57,7 +57,36 @@ pub fn scan_global(paths: &AgentHubPaths, targets: &[Target]) -> Result<Vec<Scan
         collect_plugins(&paths.user_home.join(".codex/plugins"), "codex", &mut items)?;
         let p = paths.user_home.join(".codex/AGENTS.md");
         if p.is_file() {
-            items.push(rule_item("codex", p)?);
+            let body = fs::read_to_string(&p)?;
+            let blocks = crate::rule_projection::blocks(&body)?;
+            if blocks.is_empty() {
+                let mut rule = rule_item("codex", p)?;
+                if body.starts_with("# AgentHub managed global rules\n") {
+                    rule.importable = false;
+                    rule.warning = Some("legacy_generated_rules".into());
+                }
+                items.push(rule);
+            } else {
+                for (id, _, _) in blocks {
+                    let mut rule = rule_item("codex", p.clone())?;
+                    rule.source_key = Some(format!("rule:{id}"));
+                    rule.id = sha256(format!("{}:{id}", rule.id).as_bytes());
+                    items.push(rule);
+                }
+                let mut remainder = body;
+                for (_, _, range) in crate::rule_projection::blocks(&remainder)?
+                    .into_iter()
+                    .rev()
+                {
+                    remainder.replace_range(range, "");
+                }
+                if !remainder.trim().is_empty() {
+                    let mut rule = rule_item("codex", p)?;
+                    rule.importable = false;
+                    rule.warning = Some("combined_rule_user_text".into());
+                    items.push(rule);
+                }
+            }
         }
     }
     if wanted.contains(&Target::Claude) {
@@ -72,6 +101,7 @@ pub fn scan_global(paths: &AgentHubPaths, targets: &[Target]) -> Result<Vec<Scan
     items.sort_by(|a, b| {
         (&a.source, a.kind, a.path.as_os_str()).cmp(&(&b.source, b.kind, b.path.as_os_str()))
     });
+    crate::comparison::annotate(paths, &mut items)?;
     Ok(items)
 }
 
@@ -122,6 +152,26 @@ fn collect_plugins(root: &Path, source: &str, out: &mut Vec<ScanItem>) -> Result
         let recognized = path.join("plugin.json").is_file()
             || path.join(".cursor-plugin/plugin.json").is_file()
             || path.join(".claude-plugin/plugin.json").is_file();
+        if recognized && source == "cursor" && name == "agenthub-rules" {
+            let manifest: serde_json::Value =
+                serde_json::from_slice(&fs::read(path.join(".cursor-plugin/plugin.json"))?)?;
+            anyhow::ensure!(
+                manifest.get("description").and_then(|v| v.as_str())
+                    == Some("AgentHub generated global rules"),
+                "unknown agenthub-rules container; review before scanning"
+            );
+            for rule in WalkDir::new(path.join("rules"))
+                .max_depth(1)
+                .follow_links(false)
+            {
+                let rule = rule?;
+                if rule.file_type().is_file() && rule.path().extension().is_some_and(|v| v == "mdc")
+                {
+                    out.push(rule_item(source, rule.path().to_owned())?);
+                }
+            }
+            continue;
+        }
         if recognized {
             out.push(item(CapabilityKind::Plugin, source, path, None)?);
         }
@@ -189,6 +239,7 @@ fn mcp_item(source: &str, path: PathBuf, name: &str, digest: String) -> ScanItem
         .as_bytes(),
     );
     ScanItem {
+        comparison_digest: String::new(),
         id,
         kind: CapabilityKind::Mcp,
         source: source.into(),
@@ -256,6 +307,7 @@ pub(crate) fn item(
         .as_bytes(),
     );
     Ok(ScanItem {
+        comparison_digest: String::new(),
         id,
         kind,
         source: source.into(),

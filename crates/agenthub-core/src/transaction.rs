@@ -59,17 +59,94 @@ pub fn sync_once(
     })
 }
 
+fn auto_sync_result(paths: &AgentHubPaths, store: &Store) -> crate::models::RemoteSyncResult {
+    match run_auto_sync(paths, store) {
+        Ok(auto_sync) => crate::models::RemoteSyncResult {
+            auto_sync,
+            auto_sync_error: None,
+        },
+        Err(error) => crate::models::RemoteSyncResult {
+            auto_sync: Vec::new(),
+            auto_sync_error: Some(crate::secrets::redact(&format!("{error:#}"))),
+        },
+    }
+}
+
+pub fn save_version(
+    paths: &AgentHubPaths,
+    store: &Store,
+    message: &str,
+    name: Option<&str>,
+    email: Option<&str>,
+) -> Result<crate::git::CommitResult> {
+    let mut result = crate::git::commit_and_sync(&paths.root, message, name, email)?;
+    let sync = auto_sync_result(paths, store);
+    result.auto_sync = sync.auto_sync;
+    result.auto_sync_error = sync.auto_sync_error;
+    Ok(result)
+}
+
+pub fn sync_remote(
+    paths: &AgentHubPaths,
+    store: &Store,
+) -> Result<crate::models::RemoteSyncResult> {
+    let before = crate::canonical::canonical_digest(paths)?;
+    crate::git::sync_remote(&paths.root)?;
+    if crate::canonical::canonical_digest(paths)? == before {
+        return Ok(Default::default());
+    }
+    Ok(auto_sync_result(paths, store))
+}
+
+pub fn save_rule(
+    paths: &AgentHubPaths,
+    store: &Store,
+    rule: &crate::models::RuleDocument,
+    create: bool,
+) -> Result<crate::models::CapabilityMutationResult> {
+    let capability = crate::canonical::save_rule(paths, rule, create)?;
+    let auto_sync = if create {
+        Vec::new()
+    } else {
+        run_auto_sync(paths, store)?
+    };
+    Ok(crate::models::CapabilityMutationResult {
+        capability,
+        auto_sync,
+    })
+}
+
 pub fn run_auto_sync(paths: &AgentHubPaths, store: &Store) -> Result<Vec<AutoSyncOutcome>> {
     let profiles = store.auto_sync_profiles()?;
-    let strict_authoritative = store.policy_settings()?.strict_authoritative;
+    if !profiles.iter().any(|p| p.enabled && !p.needs_review) {
+        return Ok(Vec::new());
+    }
+    let ids: std::collections::BTreeSet<_> = crate::canonical::inventory(paths)?
+        .into_iter()
+        .map(|c| (c.kind, c.id))
+        .collect();
+
     Ok(profiles
         .into_iter()
-        .filter(|profile| profile.enabled)
+        .filter(|profile| profile.enabled && !profile.needs_review)
         .map(|profile| {
             let mut selection = profile.selection;
-            if strict_authoritative {
-                selection.authoritative = true;
-            }
+            selection.skills_managed = selection.manages_skills();
+            selection.mcp_managed = selection.manages_mcp();
+            selection.plugins_managed = selection.manages_plugins();
+            selection.rules_managed = selection.manages_rules();
+            selection
+                .skills
+                .retain(|id| ids.contains(&(crate::models::CapabilityKind::Skill, id.clone())));
+            selection
+                .mcp
+                .retain(|id| ids.contains(&(crate::models::CapabilityKind::Mcp, id.clone())));
+            selection
+                .plugins
+                .retain(|id| ids.contains(&(crate::models::CapabilityKind::Plugin, id.clone())));
+            selection
+                .rule_ids
+                .retain(|id| ids.contains(&(crate::models::CapabilityKind::Rule, id.clone())));
             match sync_once(paths, store, profile.target, Some(&selection)) {
                 Ok(result) => AutoSyncOutcome {
                     target: profile.target,
@@ -236,10 +313,19 @@ fn write_domain(d: &DomainProjection) -> Result<()> {
         }
         fs::write(path, bytes)?;
     }
-    for name in &d.preserve_names {
+    for name in d
+        .preserve_names
+        .iter()
+        .collect::<std::collections::BTreeSet<_>>()
+    {
         let source = d.target_path.join(name);
-        if source.exists() {
-            copy_path(&source, &stage.join(name))?;
+        match fs::symlink_metadata(&source) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                crate::backup::copy_link(&source, &stage.join(name))?
+            }
+            Ok(_) => copy_path(&source, &stage.join(name))?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
         }
     }
     let old = parent.join(format!(".agenthub-old-{}", Uuid::new_v4()));

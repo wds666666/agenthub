@@ -91,7 +91,22 @@ try {
     Assert ((Count-Entry $first) -eq 1 -and (User-Path).StartsWith($baseline)) "PATH duplication or truncation"
     Assert ($environmentKey.GetValueKind("Path") -eq [Microsoft.Win32.RegistryValueKind]::ExpandString) "PATH representation changed"
     Check-StaleEnvironment (Join-Path $first "agenthub.exe")
-    Write-Host "Registry ownership, long PATH and Skill discovery passed."
+    # Exercise the exact embedded pre-upgrade MSI script in an isolated install.
+    $wix = [xml](Get-Content "src-tauri/binaries/msi-preserve.wxs" -Raw)
+    $encoded = [string]$wix.Wix.Fragment.CustomAction.ExeCommand
+    $encoded = $encoded.Split(' ')[-1]
+    $script = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($encoded))
+    $script = $script.Replace('HKCU:\Software\AgentHub\MSI', 'HKCU:\Software\AgentHub\MSI-Fixture')
+    New-Item -Path "HKCU:\Software\AgentHub\MSI-Fixture" -Force | Out-Null
+    New-ItemProperty -Path "HKCU:\Software\AgentHub\MSI-Fixture" -Name CliPath -Value (Join-Path $first "agenthub.exe") -Force | Out-Null
+    $msiEdited = Join-Path $first "skills/agenthub-manager/SKILL.md"
+    Set-Content -LiteralPath $msiEdited "user changed the old packaged Skill"
+    $scriptFile = Join-Path $testRoot "preserve-msi.ps1"
+    Set-Content -LiteralPath $scriptFile -Value $script -Encoding UTF8
+    & $powershell -NoProfile -ExecutionPolicy Bypass -File $scriptFile
+    Assert ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath "$msiEdited.user-preserved")) "MSI lost a modified legacy Skill"
+    Remove-Item -Path "HKCU:\Software\AgentHub\MSI-Fixture" -Recurse -Force
+    Write-Host "Registry ownership, old Skill preservation and command discovery passed."
     & ./scripts/windows-cli.ps1 -Action Install -InstallDirectory $second
     & ./scripts/windows-cli.ps1 -Action Uninstall -InstallDirectory $first
     Assert (-not (Test-Path -LiteralPath (Join-Path $first ".agenthub-installed-files.json"))) "Retired installation left its owned resource receipt"
@@ -108,7 +123,7 @@ try {
     $setup = (Get-ChildItem target/release/bundle/nsis/*-setup.exe | Select-Object -First 1).FullName
     $installed = Join-Path $testRoot "installed AgentHub"
     Invoke-Package $setup @("/S", "/D=$installed")
-    foreach ($relative in @("agenthub.exe", "agenthub-desktop.exe", "skills/agenthub-manager/SKILL.md", "skills/agenthub-manager/scripts/agenthub.ps1")) {
+    foreach ($relative in @("agenthub.exe", "agenthub-desktop.exe")) {
         Assert (Test-Path (Join-Path $installed $relative)) "Installer omitted $relative"
     }
     Check-Version (Join-Path $installed "agenthub.exe")
@@ -133,7 +148,7 @@ try {
     Assert ((Count-Entry $msiDirectory) -eq 1) "MSI did not register its actual installation directory in user PATH"
     Check-Version $msiCli
     Check-StaleEnvironment $msiCli
-    Assert (Test-Path (Join-Path $msiDirectory "skills/agenthub-manager/SKILL.md")) "MSI omitted the management Skill"
+    Assert (-not (Test-Path (Join-Path $msiDirectory "skills/agenthub-manager/SKILL.md"))) "MSI installed the optional Skill"
     Invoke-Package $msiexec @("/x", "`"$msi`"", "/qn", "/norestart", "/L*v", "`"$(Join-Path $env:RUNNER_TEMP 'agenthub-msi-uninstall.log')`"")
     Assert ((Count-Entry $msiDirectory) -eq 0 -and (User-Path) -ceq $baseline) "MSI uninstall changed unrelated PATH"
     Write-Host "MSI install, command discovery and uninstall passed."
@@ -142,13 +157,13 @@ try {
     $portableRoot = Join-Path $testRoot "portable"
     Expand-Archive -Path $archive -DestinationPath $portableRoot -Force
     $portable = Join-Path $portableRoot "AgentHub"
-    foreach ($relative in @("agenthub-desktop.exe", "agenthub.exe", "agenthub.ps1", "README.md", "skills/agenthub-manager/SKILL.md")) {
+    foreach ($relative in @("agenthub-desktop.exe", "agenthub.exe", "README.md")) {
         Assert (Test-Path (Join-Path $portable $relative)) "Portable ZIP omitted $relative"
     }
     Assert ((Get-FileHash (Join-Path $portable "agenthub-desktop.exe")).Hash -eq (Get-FileHash target/release/agenthub-desktop.exe).Hash) "Portable desktop differs from the GUI build"
     Assert ((Get-FileHash (Join-Path $portable "agenthub.exe")).Hash -eq (Get-FileHash target/release/agenthub.exe).Hash) "Portable CLI differs from the CLI build"
     $env:PATH = Join-Path $env:SystemRoot "System32"
-    $output = & $powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $portable "agenthub.ps1") --version
+    $output = & $powershell -NoProfile -ExecutionPolicy Bypass -Command "& '$portable/agenthub.exe' --version"
     Assert ($LASTEXITCODE -eq 0 -and $output -eq "agenthub $version") "Portable CLI requires a separate install"
     Assert (-not (Test-Path $env:AGENTHUB_HOME)) "Packaging or discovery unexpectedly created a library"
     Write-Host "Windows package checks passed: long PATH, ownership, resolver, upgrade, NSIS/MSI uninstall, portable ZIP."

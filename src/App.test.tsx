@@ -247,7 +247,7 @@ it("preserves cross-kind selection through search and confirms the exact batch",
 it("separates configured repositories from verified access and keeps tokens out of browser storage", async () => {
   vi.spyOn(api, "remoteSettings").mockResolvedValue({ url: "https://git.example/team/skills.git", branch: "agenthub", state: "unverified", credential_saved: false });
   const login = vi.spyOn(api, "loginRemote").mockRejectedValueOnce(new Error("Authentication failed")).mockResolvedValue({ url: "https://git.example/team/skills.git", branch: "agenthub", state: "read_verified", credential_saved: true });
-  const sync = vi.spyOn(api, "syncRemote").mockResolvedValue();
+  const sync = vi.spyOn(api, "syncRemote").mockResolvedValue({ auto_sync: [] });
   render(<App />);
   fireEvent.click(await screen.findByRole("button", { name: /^版本记录$/ }));
   expect(await screen.findByText("仓库已配置，尚未验证")).toBeInTheDocument();

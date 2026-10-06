@@ -191,7 +191,14 @@ pub fn status(root: &Path) -> Result<String> {
 }
 pub fn diff(root: &Path) -> Result<String> {
     ensure_repo(root)?;
-    let tracked = run(root, &["diff", "--no-ext-diff"])?;
+    let tracked = if snapshot(root)?.head.is_some() {
+        run(root, &["diff", "HEAD", "--no-ext-diff", "--no-textconv"])?
+    } else {
+        run(
+            root,
+            &["diff", "--cached", "--no-ext-diff", "--no-textconv"],
+        )?
+    };
     let untracked = run(root, &["ls-files", "--others", "--exclude-standard"])?;
     Ok(format!("{tracked}\n{untracked}").trim().to_string())
 }
@@ -285,6 +292,8 @@ pub struct RemoteSettings {
 }
 #[derive(Debug, serde::Serialize)]
 pub struct CommitResult {
+    pub auto_sync: Vec<crate::models::AutoSyncOutcome>,
+    pub auto_sync_error: Option<String>,
     pub local_saved: bool,
     pub remote_synced: bool,
     pub remote_error: Option<String>,
@@ -369,6 +378,17 @@ pub fn disconnect_remote(root: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Receive validated remote versions without uploading or writing any host.
+pub fn receive_remote(root: &Path) -> Result<()> {
+    anyhow::ensure!(
+        !snapshot(root)?.dirty,
+        "save local changes before receiving remote versions"
+    );
+    let settings = remote_settings(root)?;
+    let url = settings.url.context("no connected repository")?;
+    reconcile(root, &url, &settings.branch)
+}
+
 fn reconcile(root: &Path, url: &str, branch: &str) -> Result<()> {
     let remote_ref = format!("refs/heads/{branch}");
     // An empty repository has no branch to fetch yet.
@@ -437,7 +457,7 @@ fn reconcile(root: &Path, url: &str, branch: &str) -> Result<()> {
 
 // Git for Windows rejects Rust's verbatim canonical-path prefix in clone arguments.
 // Keep canonical paths for filesystem checks; normalize only child-process arguments.
-fn git_path_argument(path: &Path) -> Result<String> {
+pub(crate) fn git_path_argument(path: &Path) -> Result<String> {
     let path = path.to_str().context("invalid Git path")?;
     #[cfg(windows)]
     {
@@ -678,6 +698,8 @@ pub fn commit_and_sync(
 ) -> Result<CommitResult> {
     commit(root, message, name, email)?;
     let mut result = CommitResult {
+        auto_sync: Vec::new(),
+        auto_sync_error: None,
         local_saved: true,
         remote_synced: false,
         remote_error: None,

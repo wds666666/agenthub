@@ -3,7 +3,8 @@ use crate::{
     canonical::{canonical_digest, inventory, sha256},
     git,
     models::{
-        CapabilityKind, Plan, PlanAction, PlanCapabilitySummary, PlanStep, SyncSelection, Target,
+        CapabilityKey, CapabilityKind, Plan, PlanAction, PlanCapabilitySummary, PlanStep,
+        SyncSelection, Target,
     },
     paths::AgentHubPaths,
 };
@@ -88,6 +89,43 @@ pub fn create_with_selection(
     target: Target,
     selection: Option<&SyncSelection>,
 ) -> Result<Plan> {
+    if selection.is_none() {
+        return create_with_selection(
+            paths,
+            target,
+            Some(&crate::adapters::full_selection(paths, target)?),
+        );
+    }
+    if let Some(scope) = selection {
+        anyhow::ensure!(
+            !scope.rules && !scope.authoritative,
+            "legacy rule/authoritative scope requires review"
+        );
+        anyhow::ensure!(
+            target != Target::Cursor || !scope.plugins.iter().any(|id| id == "agenthub-rules"),
+            "agenthub-rules is a generated Rules container; select individual Rules"
+        );
+        let caps = inventory(paths)?;
+        for (kind, ids) in [
+            (CapabilityKind::Skill, &scope.skills),
+            (CapabilityKind::Mcp, &scope.mcp),
+            (CapabilityKind::Plugin, &scope.plugins),
+            (CapabilityKind::Rule, &scope.rule_ids),
+        ] {
+            let mut seen = std::collections::BTreeSet::new();
+            for id in ids {
+                anyhow::ensure!(
+                    seen.insert(id) && caps.iter().any(|c| c.kind == kind && c.id == *id),
+                    "unknown or duplicate capability selection: {id}"
+                );
+            }
+        }
+        anyhow::ensure!(
+            target != Target::Agents
+                || !(scope.manages_mcp() || scope.manages_plugins() || scope.manages_rules()),
+            "Shared Agents supports only Skills"
+        );
+    }
     let canonical = canonical_digest(paths)?;
     let git = git::snapshot(&paths.root)?;
     let domains = projection_with_selection(paths, target, selection)?;
@@ -112,8 +150,73 @@ pub fn create_with_selection(
     let mut expected = Sha256::new();
     let mut presence = BTreeMap::new();
     let mut changed_files = BTreeMap::new();
+    let mut removed_resources = Vec::new();
     for domain in domains {
         let actual = actual_files(&domain)?;
+        if domain.kind == CapabilityKind::Mcp {
+            let parse = |bytes: Option<&Vec<u8>>| -> Result<serde_json::Value> {
+                match bytes {
+                    None => Ok(serde_json::json!({})),
+                    Some(bytes) if target == Target::Codex => Ok(serde_json::to_value(
+                        std::str::from_utf8(bytes)?.parse::<toml::Value>()?,
+                    )?),
+                    Some(bytes) => Ok(serde_json::from_slice(bytes)?),
+                }
+            };
+            let current = parse(actual.get(std::path::Path::new("")))?;
+            let desired = parse(domain.files.get(std::path::Path::new("")))?;
+            let field = if target == Target::Codex {
+                "mcp_servers"
+            } else {
+                "mcpServers"
+            };
+            if let Some(servers) = current[field].as_object() {
+                for id in servers
+                    .keys()
+                    .filter(|id| desired[field].get(*id).is_none())
+                {
+                    removed_resources.push(CapabilityKey {
+                        kind: CapabilityKind::Mcp,
+                        id: id.clone(),
+                    });
+                }
+            }
+        }
+        if target == Target::Codex && domain.kind == CapabilityKind::Rule {
+            let current = actual
+                .get(std::path::Path::new(""))
+                .map(|b| std::str::from_utf8(b))
+                .transpose()?
+                .unwrap_or("");
+            let desired = domain
+                .files
+                .get(std::path::Path::new(""))
+                .map(|b| std::str::from_utf8(b))
+                .transpose()?
+                .unwrap_or("");
+            let old_blocks = crate::rule_projection::blocks(current)?;
+            let new_blocks = crate::rule_projection::blocks(desired)?;
+            for (id, _, _) in &old_blocks {
+                if !new_blocks.iter().any(|(new_id, _, _)| new_id == id) {
+                    removed_resources.push(CapabilityKey {
+                        kind: CapabilityKind::Rule,
+                        id: id.clone(),
+                    });
+                }
+            }
+            if selection.is_some_and(|scope| scope.mode == crate::models::SyncMode::Replace) {
+                let mut user_text = current.to_owned();
+                for (_, _, range) in old_blocks.iter().rev() {
+                    user_text.replace_range(range.clone(), "");
+                }
+                if !user_text.trim().is_empty() {
+                    removed_resources.push(CapabilityKey {
+                        kind: CapabilityKind::Rule,
+                        id: "__user_text__".into(),
+                    });
+                }
+            }
+        }
         for rel in actual.keys() {
             presence
                 .entry(logical_owner(target, &domain, rel))
@@ -185,6 +288,7 @@ pub fn create_with_selection(
         expected_digest: hex::encode(expected.finalize()),
         git,
         steps,
+        removed_resources,
         selection: selection.cloned(),
         summary,
         warnings,

@@ -1,7 +1,7 @@
 use agenthub_core::{
     canonical, git,
     models::{CapabilityKind, SyncSelection, Target},
-    planner, scanner, secrets, transaction, AgentHub,
+    planner, scanner, secrets, transaction, versions, AgentHub,
 };
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -105,6 +105,20 @@ enum AutoSyncCommand {
 }
 #[derive(Subcommand)]
 enum GitCommand {
+    /// Capability-level unsaved changes; does not contact the remote.
+    Changes,
+    /// Preview DISCARD of pending edits or REMOTE content replacement.
+    RecoveryPlan {
+        action: String,
+    },
+    /// Apply only a reviewed recovery Plan with its exact confirmation word.
+    RecoveryApply {
+        plan_id: String,
+        #[arg(long)]
+        confirmation: String,
+    },
+    /// Receive validated library versions without uploading or changing tools.
+    Receive,
     RemoteStatus,
     /// Read a repository access token from stdin; never pass it as an argument.
     Login {
@@ -258,6 +272,7 @@ fn main() -> Result<()> {
                     (CapabilityKind::Skill, &scope.skills),
                     (CapabilityKind::Mcp, &scope.mcp),
                     (CapabilityKind::Plugin, &scope.plugins),
+                    (CapabilityKind::Rule, &scope.rule_ids),
                 ] {
                     let mut seen = std::collections::BTreeSet::new();
                     for id in ids {
@@ -344,7 +359,37 @@ fn main() -> Result<()> {
                 )?)?
             ),
             GitCommand::Disconnect => git::disconnect_remote(&hub.paths.root)?,
-            GitCommand::Sync => git::sync_remote(&hub.paths.root)?,
+            GitCommand::Receive => git::receive_remote(&hub.paths.root)?,
+            GitCommand::Sync => println!(
+                "{}",
+                serde_json::to_string_pretty(&transaction::sync_remote(&hub.paths, &hub.store)?)?
+            ),
+            GitCommand::Changes => println!(
+                "{}",
+                serde_json::to_string_pretty(&versions::changes(&hub.paths)?)?
+            ),
+            GitCommand::RecoveryPlan { action } => {
+                let action = match action.as_str() {
+                    "discard" => versions::VersionAction::Discard,
+                    "remote" => versions::VersionAction::Remote,
+                    _ => anyhow::bail!("action must be discard or remote"),
+                };
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&versions::preview(&hub.paths, action)?)?
+                );
+            }
+            GitCommand::RecoveryApply {
+                plan_id,
+                confirmation,
+            } => println!(
+                "{}",
+                serde_json::to_string_pretty(&versions::apply(
+                    &hub.paths,
+                    plan_id.parse()?,
+                    &confirmation
+                )?)?
+            ),
             GitCommand::Status => println!("{}", git::status(&hub.paths.root)?),
             GitCommand::Diff => println!("{}", git::diff(&hub.paths.root)?),
             GitCommand::Commit {
@@ -353,8 +398,9 @@ fn main() -> Result<()> {
                 email,
             } => println!(
                 "{}",
-                serde_json::to_string_pretty(&git::commit_and_sync(
-                    &hub.paths.root,
+                serde_json::to_string_pretty(&transaction::save_version(
+                    &hub.paths,
+                    &hub.store,
                     &message,
                     name.as_deref(),
                     email.as_deref()
@@ -410,6 +456,8 @@ fn read_selection(path: PathBuf) -> Result<SyncSelection> {
     for key in object.keys() {
         anyhow::ensure!(
             [
+                "mode",
+                "rule_ids",
                 "skills_managed",
                 "skills",
                 "plugins_managed",

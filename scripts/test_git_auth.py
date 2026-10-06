@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import shutil
 import ssl
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -136,8 +137,61 @@ def main():
             (skill2 / 'SKILL.md').write_text('# Two\n')
             run(second, 'git', 'commit', '-m', 'second', '--name', 'Tester', '--email', 'test@example.com')
             run(second, 'git', 'login', url, '--branch', 'agenthub', '--username', 'tester', secret=token)
-            run(second, 'git', 'sync')
+            # Receiving updates uses this device's explicit scope, never all library items.
+            profile = {'target': 'agents', 'enabled': True, 'needs_review': False,
+                       'selection': {'mode': 'preserve', 'skills_managed': True, 'skills': ['one'],
+                                     'plugins': [], 'mcp': [], 'rule_ids': []}}
+            with sqlite3.connect(second / 'state/agenthub.db') as database:
+                database.execute('INSERT OR REPLACE INTO meta(key,value) VALUES (?,?)',
+                                 ('auto_sync_profile_agents', json.dumps(profile)))
+            host_skills = home / '.agents/skills'
+            own = host_skills / 'host-only'
+            own.mkdir(parents=True)
+            (own / 'SKILL.md').write_text('# Host only\n')
+            received = run(second, 'git', 'sync')
+            assert len(received['auto_sync']) == 1 and not received['auto_sync_error']
             assert (second / 'skills/one/SKILL.md').exists()
+            assert (host_skills / 'one/SKILL.md').read_text() == '# One\n'
+            assert not (host_skills / 'two').exists()
+            assert (own / 'SKILL.md').read_text() == '# Host only\n'
+            (host_skills / 'one/SKILL.md').write_text('# Local improvement\n')
+            unchanged = run(second, 'git', 'sync')
+            assert unchanged['auto_sync'] == []
+            assert (host_skills / 'one/SKILL.md').read_text() == '# Local improvement\n'
+            # A dirty/staged local library can explicitly adopt a reviewed remote
+            # snapshot without resetting history, pushing, or deploying tool content.
+            before_head = subprocess.check_output([git, '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip()
+            host_before = (host_skills / 'one/SKILL.md').read_text()
+            (skill / 'SKILL.md').write_text('# Unsaved local\n')
+            subprocess.run([git, '-C', str(root), 'add', 'skills/one'], check=True)
+            local_only = root / 'skills/local-only'
+            local_only.mkdir()
+            (local_only / 'SKILL.md').write_text('# Local only\n')
+            mode['read_only'] = True
+            preview = run(root, 'git', 'recovery-plan', 'remote')
+            assert any(item['id'] == 'local-only' and item['action'] == 'delete' for item in preview['changes'])
+            run(root, 'git', 'recovery-apply', preview['id'], '--confirmation', 'DISCARD', success=False)
+            remote_parent = subprocess.check_output([git, '-C', str(repo), 'rev-parse', 'refs/heads/agenthub'], text=True).strip()
+            remote_tree = subprocess.check_output([git, '-C', str(repo), 'rev-parse', remote_parent + '^{tree}'], text=True).strip()
+            raced = subprocess.check_output([git, '-C', str(repo), '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.com', 'commit-tree', remote_tree, '-p', remote_parent, '-m', 'cloud race'], text=True).strip()
+            subprocess.run([git, '-C', str(repo), 'update-ref', 'refs/heads/agenthub', raced], check=True)
+            run(root, 'git', 'recovery-apply', preview['id'], '--confirmation', 'REMOTE', success=False)
+            assert (skill / 'SKILL.md').read_text() == '# Unsaved local\n'
+            preview = run(root, 'git', 'recovery-plan', 'remote')
+            recovery = run(root, 'git', 'recovery-apply', preview['id'], '--confirmation', 'REMOTE')
+            assert (root / 'skills/one/SKILL.md').read_text() == '# One\n'
+            assert (root / 'skills/two/SKILL.md').read_text() == '# Two\n'
+            assert not local_only.exists()
+            assert (Path(recovery['backup_path']) / 'skills/local-only/SKILL.md').read_text() == '# Local only\n'
+            assert recovery['pending_changes']
+            assert subprocess.check_output([git, '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip() == before_head
+            assert (host_skills / 'one/SKILL.md').read_text() == host_before
+            # Authentication/unsupported remote layouts leave library content unchanged.
+            subprocess.run([git, '-C', str(root), 'config', 'agenthub.remoteBranch', 'missing'], check=True)
+            run(root, 'git', 'recovery-plan', 'remote', success=False)
+            assert (root / 'skills/one/SKILL.md').read_text() == '# One\n'
+            subprocess.run([git, '-C', str(root), 'config', 'agenthub.remoteBranch', 'agenthub'], check=True)
+            mode['read_only'] = False
             # Restore exact existing history while the server rejects every push.
             expected = subprocess.check_output([git, '-C', str(repo), 'rev-parse', 'refs/heads/agenthub'], text=True).strip()
             mode['read_only'] = True
@@ -181,6 +235,10 @@ def main():
                 assert not run(destination, 'doctor', '--json')['initialized']
                 assert not list(temporary.glob(destination.name + '-restore-*'))
                 assert not (destination / 'secrets/master.key').exists()
+                subprocess.run([git, '-C', str(root), 'config', 'agenthub.remoteBranch', name], check=True)
+                run(root, 'git', 'recovery-plan', 'remote', success=False)
+                assert (root / 'skills/one/SKILL.md').read_text() == '# One\n'
+                subprocess.run([git, '-C', str(root), 'config', 'agenthub.remoteBranch', 'agenthub'], check=True)
             # GitHub-style default main branch works without a fixed agenthub branch.
             default_repo = server_root / 'default.git'
             subprocess.run([git, 'clone', '--bare', str(repo), str(default_repo)], check=True, capture_output=True)
@@ -241,7 +299,7 @@ def main():
             settings = run(root, 'git', 'remote-status')
             assert settings['url'] == url and not settings['credential_saved'] and settings['state'] == 'unverified'
             run(root, 'git', 'sync', success=False)
-            print('PASS: real HTTPS login, shared native helper, read-only bootstrap with exact history, author-free reception, rejected layouts/branches/auth/history, SQLite recovery, two-device merge, rejected push preserves commit, replacement rollback, encryption, forget, credential-free output')
+            print('PASS: real HTTPS login, shared native helper, read-only bootstrap with exact history, author-free reception, rejected layouts/branches/auth/history, SQLite recovery, two-device merge, reviewed remote replacement/stale-snapshot refusal, rejected push preserves commit, replacement rollback, encryption, forget, credential-free output')
         finally:
             server.shutdown()
             server.server_close()

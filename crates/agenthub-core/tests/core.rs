@@ -211,6 +211,7 @@ fn shared_agents_skills_can_be_explicitly_cleared() {
     fs::create_dir_all(&host_skill).unwrap();
     fs::write(host_skill.join("SKILL.md"), "# Host only").unwrap();
     let selection = SyncSelection {
+        mode: agenthub_core::models::SyncMode::Replace,
         skills_managed: true,
         skills: Vec::new(),
         ..SyncSelection::default()
@@ -659,7 +660,9 @@ fn plan_is_read_only_and_apply_preserves_unrelated_mcp_settings() {
     )
     .unwrap();
     let before = fs::read(cursor.join("mcp.json")).unwrap();
-    let plan = planner::create(&hub.paths, Target::Cursor).unwrap();
+    let mut scope = adapters::full_selection(&hub.paths, Target::Cursor).unwrap();
+    scope.mode = agenthub_core::models::SyncMode::Replace;
+    let plan = planner::create_with_selection(&hub.paths, Target::Cursor, Some(&scope)).unwrap();
     assert_eq!(fs::read(cursor.join("mcp.json")).unwrap(), before);
     let skills = plan
         .summary
@@ -739,7 +742,7 @@ fn claude_apply_preserves_cli_managed_plugin_store_and_reports_constraint() {
     let (temp, hub) = fixture();
     seed(&hub);
     let canonical_plugin = hub.paths.plugins.join("example");
-    fs::create_dir_all(&canonical_plugin).unwrap();
+    fs::create_dir_all(canonical_plugin.join("payload")).unwrap();
     fs::write(
         canonical_plugin.join("agenthub.plugin.json"),
         r#"{"schemaVersion":1,"id":"example","displayName":"Example","components":[]}"#,
@@ -770,7 +773,9 @@ fn manual_rollback_restores_pre_apply_state_and_records_a_new_transaction() {
     fs::create_dir_all(cursor.join("skills/host-only")).unwrap();
     fs::write(cursor.join("skills/host-only/SKILL.md"), "before apply").unwrap();
 
-    let plan = planner::create(&hub.paths, Target::Cursor).unwrap();
+    let mut scope = adapters::full_selection(&hub.paths, Target::Cursor).unwrap();
+    scope.mode = agenthub_core::models::SyncMode::Replace;
+    let plan = planner::create_with_selection(&hub.paths, Target::Cursor, Some(&scope)).unwrap();
     hub.store.save_plan(&plan).unwrap();
     let applied = transaction::apply(&hub.paths, &hub.store, &plan).unwrap();
     assert!(cursor.join("skills/review/SKILL.md").exists());
@@ -811,6 +816,7 @@ fn selected_sync_scope_only_projects_selected_domains_and_resources() {
     .unwrap();
 
     let selection = SyncSelection {
+        mode: agenthub_core::models::SyncMode::Replace,
         skills: vec!["review".into()],
         plugins: Vec::new(),
         mcp: Vec::new(),
@@ -897,6 +903,7 @@ fn plugin_import_rejects_unknown_components_and_traversal() {
     let plugin = temp.path().join("plugin");
     fs::create_dir_all(&plugin).unwrap();
     let scan = |path: &std::path::Path| ScanItem {
+        comparison_digest: String::new(),
         id: "scan".into(),
         kind: CapabilityKind::Plugin,
         source: "cursor".into(),
@@ -1022,6 +1029,7 @@ fn automatic_sync_profiles_run_after_mutation_and_skip_noop_transactions() {
     );
     hub.store
         .set_auto_sync_profile(&agenthub_core::models::AutoSyncProfile {
+            needs_review: false,
             target: Target::Cursor,
             enabled: true,
             selection,
@@ -1045,7 +1053,7 @@ fn automatic_sync_profiles_run_after_mutation_and_skip_noop_transactions() {
 }
 
 #[test]
-fn strict_authority_expands_saved_auto_scope_to_all_canonical_resources() {
+fn legacy_strict_policy_does_not_expand_saved_scope() {
     let (temp, hub) = fixture();
     seed(&hub);
     let second = hub.paths.skills.join("second");
@@ -1053,6 +1061,7 @@ fn strict_authority_expands_saved_auto_scope_to_all_canonical_resources() {
     fs::write(second.join("SKILL.md"), "# Second").unwrap();
     hub.store
         .set_auto_sync_profile(&agenthub_core::models::AutoSyncProfile {
+            needs_review: false,
             target: Target::Cursor,
             enabled: true,
             selection: SyncSelection {
@@ -1064,6 +1073,7 @@ fn strict_authority_expands_saved_auto_scope_to_all_canonical_resources() {
         .unwrap();
     hub.store
         .set_policy_settings(&agenthub_core::models::PolicySettings {
+            sync_mode: agenthub_core::models::SyncMode::Preserve,
             strict_authoritative: true,
             sync_after_reverse_import: false,
         })
@@ -1072,7 +1082,7 @@ fn strict_authority_expands_saved_auto_scope_to_all_canonical_resources() {
     let outcomes = transaction::run_auto_sync(&hub.paths, &hub.store).unwrap();
     assert!(outcomes[0].changed, "{:?}", outcomes[0]);
     assert!(temp.path().join(".cursor/skills/review/SKILL.md").is_file());
-    assert!(temp.path().join(".cursor/skills/second/SKILL.md").is_file());
+    assert!(!temp.path().join(".cursor/skills/second/SKILL.md").exists());
 }
 
 #[test]
@@ -1089,6 +1099,7 @@ fn deleting_canonical_capability_runs_saved_auto_sync_scope() {
     transaction::sync_once(&hub.paths, &hub.store, Target::Cursor, Some(&selection)).unwrap();
     hub.store
         .set_auto_sync_profile(&agenthub_core::models::AutoSyncProfile {
+            needs_review: false,
             target: Target::Cursor,
             enabled: true,
             selection,
@@ -1099,9 +1110,13 @@ fn deleting_canonical_capability_runs_saved_auto_sync_scope() {
     let outcomes = transaction::run_auto_sync(&hub.paths, &hub.store).unwrap();
 
     assert_eq!(outcomes.len(), 1);
-    assert!(outcomes[0].changed);
+    assert!(!outcomes[0].changed);
     assert!(outcomes[0].error.is_none());
-    assert!(!hub.paths.user_home.join(".cursor/skills/review").exists());
+    assert!(hub
+        .paths
+        .user_home
+        .join(".cursor/skills/review/SKILL.md")
+        .exists());
     assert!(canonical::inventory(&hub.paths)
         .unwrap()
         .iter()

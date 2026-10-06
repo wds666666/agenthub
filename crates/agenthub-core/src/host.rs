@@ -23,7 +23,10 @@ pub fn inventory(paths: &AgentHubPaths, target: Target) -> Result<Vec<HostResour
         let display_name = item
             .source_key
             .as_deref()
-            .and_then(|v| v.strip_prefix("server:"))
+            .and_then(|v| {
+                v.strip_prefix("server:")
+                    .or_else(|| v.strip_prefix("rule:"))
+            })
             .map(str::to_owned)
             .or_else(|| {
                 item.path
@@ -31,15 +34,27 @@ pub fn inventory(paths: &AgentHubPaths, target: Target) -> Result<Vec<HostResour
                     .map(|v| v.to_string_lossy().into_owned())
             })
             .unwrap_or_else(|| item.id[..8].to_owned());
-        let canonical = caps.iter().find(|cap| {
-            cap.kind == item.kind && (cap.digest == item.digest || cap.id == display_name)
+        let exact = caps
+            .iter()
+            .find(|cap| cap.kind == item.kind && cap.comparison_digest == item.comparison_digest);
+        let canonical = exact.or_else(|| {
+            caps.iter()
+                .find(|cap| cap.kind == item.kind && cap.id == display_name)
         });
         let plugin_constraint =
             item.kind == CapabilityKind::Plugin && matches!(target, Target::Codex | Target::Claude);
-        let relation = if plugin_constraint {
+        let relation = if !item.importable
+            && item.warning.as_deref() == Some("comparison_unavailable")
+        {
+            HostResourceRelation::Unknown
+        } else if !item.importable && item.warning.as_deref() == Some("legacy_generated_rules") {
+            HostResourceRelation::Generated
+        } else if plugin_constraint {
             HostResourceRelation::Constraint
-        } else if canonical.is_some() {
+        } else if exact.is_some() {
             HostResourceRelation::CanonicalMatch
+        } else if canonical.is_some() {
+            HostResourceRelation::Modified
         } else {
             HostResourceRelation::HostOnly
         };
@@ -56,6 +71,29 @@ pub fn inventory(paths: &AgentHubPaths, target: Target) -> Result<Vec<HostResour
             constraint: plugin_constraint
                 .then(|| format!("{}_plugins_cli_managed", target.as_str())),
         });
+    }
+    if target == Target::Cursor {
+        let path = paths.user_home.join(".cursor/plugins/local/agenthub-rules");
+        let manifest = path.join(".cursor-plugin/plugin.json");
+        if manifest.is_file() {
+            let value: serde_json::Value = serde_json::from_slice(&fs::read(&manifest)?)?;
+            if value.get("description").and_then(|v| v.as_str())
+                == Some("AgentHub generated global rules")
+            {
+                out.push(HostResource {
+                    id: sha256(format!("generated:{}", path.display()).as_bytes()),
+                    target,
+                    kind: CapabilityKind::Plugin,
+                    display_name: "agenthub-rules".into(),
+                    path,
+                    digest: tree_digest(&manifest)?,
+                    relation: HostResourceRelation::Generated,
+                    canonical_id: None,
+                    deletable: false,
+                    constraint: None,
+                });
+            }
+        }
     }
     if matches!(target, Target::Codex | Target::Claude) {
         let cache = paths

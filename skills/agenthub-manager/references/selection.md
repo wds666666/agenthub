@@ -1,43 +1,27 @@
-# AgentHub scope and recovery reference
+# Explicit synchronization scope
 
-## Sync scope
-
-The Desktop Target Sync page starts with an explicit scope selector:
-
-- Skills, Plugins, and MCP servers are selected by Canonical ID.
-- Rules are selected as one target-wide toggle because adapters may render Rules as a combined global file or plugin.
-- “Select all” means all current Canonical inventory items, not arbitrary host resources.
-- A generated Plan persists the selection snapshot. Changing the inventory after Plan creation makes Apply fail with “generate a new plan”.
-- An automatic-sync profile persists the target and the same selection shape in SQLite. Enabling or changing it requires user confirmation and an initial successful reconciliation. Later AgentHub mutations reuse that stored scope without silently adding newly created capabilities.
-
-Selected Skills/Plugins/MCP are projected into the target writable domain. Host extras in an included domain are shown as deletions and are covered by the transaction backup. A domain with no selected resources is not touched. Rules disabled means the target Rules domain is not touched.
-
-For CLI, create a JSON file outside Canonical (or in its ignored `runtime/` directory), then use `agenthub plan cursor --selection <file> --json`:
+Always inspect `agenthub inventory --json` and the installed CLI help first. Store selection files outside versioned content, such as the library's ignored `runtime/` directory.
 
 ```json
 {
+  "mode": "preserve",
   "skills_managed": true,
-  "skills": ["review", "writing"],
-  "mcp": ["example"],
+  "skills": ["example"],
+  "mcp_managed": true,
+  "mcp": ["server"],
+  "plugins_managed": false,
   "plugins": [],
-  "rules": false
+  "rules_managed": true,
+  "rule_ids": ["safety"]
 }
 ```
 
-This manages the chosen Skills/MCP domains; their host extras may be deleted. Omitted/false managed flags with empty lists leave that domain untouched. A true managed flag with an empty list explicitly clears that domain. `rules: true` includes all compatible library Rules; `rules_managed: true` with `rules: false` clears writable Rules. `authoritative: true` includes every writable domain, including empty ones; do not enable it as a shortcut. Unknown fields fail, and invalid IDs are rejected by the planner. Without `--selection`, CLI Plan covers all compatible resources. `agents` is a valid target but only supports Skills.
+Use `agenthub plan cursor --selection <file> --json`, review the named changes, then apply the exact Plan with explicit confirmation. Unknown fields and invalid/duplicate IDs are rejected. Skills, MCP, Plugins and Rules are individually selected. `agents` supports Skills only; Codex and Claude official plugin stores remain protected.
 
-Automatic sync is triggered by AgentHub mutation commands rather than a background watcher. A direct Canonical filesystem edit by an external agent must be followed by `agenthub auto-sync run`; this runs only profiles the user already enabled. A no-op run creates no Plan, backup, or transaction, while every real host write retains a separately rollback-capable transaction.
+`preserve` is the default: add or replace only selected capabilities, leaving all unselected content intact. Removing an ID from the selection or deleting it from the library does not remove its host copy. Use explicit host cleanup for deletion.
 
-## Review checklist
+`replace` reconciles only managed categories to the selected subset, including deletion of host extras. A managed category with an empty list is cleared only in this mode. Categories with no management flag and no selected IDs are untouched. Neither mode expands scope to other library content.
 
-Before applying, verify:
+New Rules are saved only to AgentHub and are not automatically selected. Explicitly selected Rules may participate in automatic sync after user confirmation. Old automatic profiles pause on upgrade for mode and individual-rule review; legacy `rules` and `authoritative` switches cannot authorize a new Plan.
 
-1. The target is the intended user-global tool.
-2. The scope counts match the user's request.
-3. Deletes are expected, especially host-only resources.
-4. Warnings do not require secret materialization or acknowledge a compatibility loss.
-5. The Plan ID and Canonical digest are the ones being approved.
-
-## Rollback
-
-`agenthub rollback <transaction-id>` restores the writable target domains from that transaction's pre-Apply backup. It first backs up the target's current state, validates the restored files, and records a new transaction so the rollback itself can be undone. It does not restore Canonical Git content, disable a target, or remove the historical record. The next sync will reconcile the target back to the current Canonical state.
+Plan generation is read-only. Apply detects changed library/target state, backs up, writes, verifies and rolls back on failure. Automatic profiles are device-local, not Git content. Their saved mode and selection do not change when the default mode in Settings changes. New library capabilities do not silently enter an existing profile.

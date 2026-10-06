@@ -77,6 +77,7 @@ impl Store {
                 self.meta(&key)?.map_or_else(
                     || {
                         Ok(AutoSyncProfile {
+                            needs_review: false,
                             target: *target,
                             enabled: false,
                             selection: SyncSelection::default(),
@@ -86,6 +87,30 @@ impl Store {
                 )
             })
             .collect()
+    }
+    pub fn migrate_sync_profiles(&self, paths: &crate::paths::AgentHubPaths) -> Result<()> {
+        for target in Target::ALL {
+            let key = format!("auto_sync_profile_{}", target.as_str());
+            if let Some(payload) = self.meta(&key)? {
+                let value: serde_json::Value = serde_json::from_str(&payload)?;
+                if value["selection"].get("mode").is_none() {
+                    let mut profile: AutoSyncProfile = serde_json::from_value(value)?;
+                    profile.enabled = false;
+                    profile.needs_review = true;
+                    profile.selection.authoritative = false;
+                    if profile.selection.rules {
+                        profile.selection.rule_ids = crate::canonical::inventory(paths)?
+                            .into_iter()
+                            .filter(|c| c.kind == crate::models::CapabilityKind::Rule)
+                            .map(|c| c.id)
+                            .collect();
+                    }
+                    profile.selection.rules = false;
+                    self.set_auto_sync_profile(&profile)?;
+                }
+            }
+        }
+        Ok(())
     }
     pub fn set_auto_sync_profile(&self, profile: &AutoSyncProfile) -> Result<()> {
         self.set_meta(
@@ -111,7 +136,14 @@ impl Store {
             .query_row("SELECT payload FROM plans WHERE id=?1", [id], |r| r.get(0))
             .optional()?;
         payload
-            .map(|p| serde_json::from_str(&p).map_err(Into::into))
+            .map(|p| {
+                let value: serde_json::Value = serde_json::from_str(&p)?;
+                anyhow::ensure!(
+                    value["selection"].get("mode").is_some(),
+                    "saved plan uses legacy scope; generate a new plan"
+                );
+                Ok(serde_json::from_value(value)?)
+            })
             .transpose()
     }
     pub fn save_transaction(&self, tx: &Transaction) -> Result<()> {

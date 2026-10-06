@@ -63,6 +63,10 @@ impl std::str::FromStr for Target {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Capability {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duplicate_of: Option<String>,
+    #[serde(default)]
+    pub comparison_digest: String,
     pub id: String,
     pub kind: CapabilityKind,
     pub display_name: String,
@@ -108,6 +112,8 @@ pub struct GitIdentity {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ScanItem {
+    #[serde(default)]
+    pub comparison_digest: String,
     pub id: String,
     pub kind: CapabilityKind,
     pub source: String,
@@ -127,6 +133,9 @@ pub struct ScanItem {
 #[serde(rename_all = "snake_case")]
 pub enum HostResourceRelation {
     CanonicalMatch,
+    Modified,
+    Generated,
+    Unknown,
     HostOnly,
     Constraint,
 }
@@ -189,8 +198,20 @@ pub struct PlanCapabilitySummary {
     pub files: usize,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SyncMode {
+    #[default]
+    Preserve,
+    Replace,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct SyncSelection {
+    #[serde(default)]
+    pub mode: SyncMode,
+    #[serde(default)]
+    pub rule_ids: Vec<String>,
     #[serde(default)]
     pub skills_managed: bool,
     #[serde(default)]
@@ -213,16 +234,16 @@ pub struct SyncSelection {
 
 impl SyncSelection {
     pub fn manages_skills(&self) -> bool {
-        self.authoritative || self.skills_managed || !self.skills.is_empty()
+        self.skills_managed || !self.skills.is_empty()
     }
     pub fn manages_plugins(&self) -> bool {
-        self.authoritative || self.plugins_managed || !self.plugins.is_empty()
+        self.plugins_managed || !self.plugins.is_empty()
     }
     pub fn manages_mcp(&self) -> bool {
-        self.authoritative || self.mcp_managed || !self.mcp.is_empty()
+        self.mcp_managed || !self.mcp.is_empty()
     }
     pub fn manages_rules(&self) -> bool {
-        self.authoritative || self.rules_managed || self.rules
+        self.rules_managed || !self.rule_ids.is_empty()
     }
 }
 impl Default for PlanCapabilitySummary {
@@ -253,6 +274,8 @@ pub struct Plan {
     pub expected_digest: String,
     pub git: GitSnapshot,
     pub steps: Vec<PlanStep>,
+    #[serde(default)]
+    pub removed_resources: Vec<CapabilityKey>,
     #[serde(default)]
     pub selection: Option<SyncSelection>,
     #[serde(default)]
@@ -295,6 +318,8 @@ pub struct SyncRunResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AutoSyncProfile {
+    #[serde(default)]
+    pub needs_review: bool,
     pub target: Target,
     pub enabled: bool,
     pub selection: SyncSelection,
@@ -306,6 +331,12 @@ pub struct AutoSyncOutcome {
     pub changed: bool,
     pub transaction_id: Option<String>,
     pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RemoteSyncResult {
+    pub auto_sync: Vec<AutoSyncOutcome>,
+    pub auto_sync_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -350,6 +381,8 @@ pub struct ScanImportResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct PolicySettings {
+    #[serde(default)]
+    pub sync_mode: SyncMode,
     #[serde(default)]
     pub strict_authoritative: bool,
     #[serde(default)]

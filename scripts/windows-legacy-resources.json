@@ -77,6 +77,14 @@
     {
       "path": "skills/agenthub-manager/references/storage.md",
       "sha256": "adadc59965692ae1dc55d6220b41fd9e554250bb5af8753af313367086d697f2"
+    },
+    {
+      "path": "skills/agenthub-manager/SKILL.md",
+      "sha256": "cc576bb6aa24e4122e7ddc9bec7332c9aebf7d950adb62e88ac510373552b1b8"
+    },
+    {
+      "path": "skills/agenthub-manager/references/installation.md",
+      "sha256": "3bc9f6f723f8e4810966c6a89f04250d8a194b753fa0318a4b3cc32675a0f7fb"
     }
   ]
 }

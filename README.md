@@ -15,12 +15,12 @@
 
 ## 下载与使用
 
-从 [发行版](https://github.com/wds666666/agenthub/releases/latest) 下载 Windows x64 或 Ubuntu x64 安装包。**安装一次即可使用界面、CLI 和随包提供的管理 Skill，无需再下载独立 CLI。** Windows 优先选择 `-setup.exe`，安装后注册当前用户的命令路径，并包含 WebView2；Ubuntu 使用 `.deb`。使用前安装系统 Git。
+从 [发行版](https://github.com/wds666666/agenthub/releases/latest) 下载 Windows x64 或 Ubuntu x64 安装包。**安装一次即可使用界面和 CLI，无需再下载独立 CLI。** Windows 优先选择 `-setup.exe`，安装后注册当前用户的命令路径，并包含 WebView2；Ubuntu 使用 `.deb`。使用前安装系统 Git。
 
 Windows [完整便携 ZIP](docs/portable-windows.md) 同时包含界面和 CLI。独立 CLI 仅供纯命令行场景。临时构建可在 [Actions](https://github.com/wds666666/agenthub/actions) 下载，保留 14 天，需要登录 GitHub。
 
 1. 首次启动，扫描并选择要导入的全局能力。
-2. 在“同步到工具”选择目标与范围，检查变更预览后应用。
+2. 在“同步到工具”选择目标、逐项范围与保留／替换模式，检查变更预览后应用。默认保留未选内容。
 3. 在“版本记录”保存修改；需要多设备同步时连接专用 Git 仓库。
 
 仅管理用户级配置。清理和重置前会提示影响范围；请确认后再执行。
@@ -36,6 +36,6 @@ pnpm tauri dev
 - [架构](docs/architecture.md) · [存储标准](docs/agenthub-standard.md) · [同步契约](docs/sync-contract.md)
 - [安全边界](docs/security.md) · [外部 Agent 管理 skill](skills/agenthub-manager/SKILL.md)
 
-迁移现有备份流前，查看 [迁移说明](skills/agenthub-manager/references/migration.md)。管理 Skill 随安装包提供；复制到所用工具的用户级 Skills 目录即可加载。它包含命令定位、文件格式、范围预览和冲突处理指引，尚未通过 CLI 暴露的桌面操作也会明确说明。
+迁移现有备份流前，查看 [迁移说明](skills/agenthub-manager/references/migration.md)。管理 Skill 不随安装包自动安装；从上面的源码入口获取完整 `agenthub-manager` 文件夹，按需手动复制到工具的用户级 Skills 目录。它包含命令定位、文件格式、范围预览和冲突处理指引，尚未通过 CLI 暴露的桌面操作也会明确说明。
 
 默认沿用当前版本号。本地测试通过后创建标签，才触发云端构建；普通推送不编译安装包，只有明确同意发布时才创建发行版。

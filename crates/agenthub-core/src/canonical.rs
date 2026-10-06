@@ -54,6 +54,16 @@ pub fn inventory(paths: &AgentHubPaths) -> Result<Vec<Capability>> {
     collect_dirs(&paths.rules, CapabilityKind::Rule, &mut out)?;
     collect_dirs(&paths.mcp, CapabilityKind::Mcp, &mut out)?;
     out.sort_by(|a, b| (a.kind, a.id.as_str()).cmp(&(b.kind, b.id.as_str())));
+    let mut seen: std::collections::BTreeMap<(CapabilityKind, String), String> =
+        std::collections::BTreeMap::new();
+    for cap in &mut out {
+        let key = (cap.kind, cap.comparison_digest.clone());
+        if let Some(id) = seen.get(&key) {
+            cap.duplicate_of = Some(id.clone());
+        } else {
+            seen.insert(key, cap.id.clone());
+        }
+    }
     Ok(out)
 }
 
@@ -174,6 +184,8 @@ fn collect_dirs(root: &Path, kind: CapabilityKind, out: &mut Vec<Capability>) ->
             _ => id.clone(),
         };
         out.push(Capability {
+            duplicate_of: None,
+            comparison_digest: crate::comparison::canonical_digest(kind, &path)?,
             id: id.clone(),
             kind,
             display_name,
@@ -576,22 +588,31 @@ pub fn validate_mcp(s: &McpServer) -> Result<()> {
 
 pub fn import_scan_items(paths: &AgentHubPaths, items: &[ScanItem]) -> Result<Vec<String>> {
     let mut imported = Vec::new();
-    let mut seen = std::collections::BTreeSet::new();
-    for item in items.iter().filter(|i| i.selected) {
+    let mut seen: std::collections::BTreeSet<_> = inventory(paths)?
+        .into_iter()
+        .map(|c| (c.kind, c.comparison_digest))
+        .collect();
+    let mut checked = items.to_vec();
+    crate::comparison::annotate(paths, &mut checked)
+        .context("import skill from selected source: content validation failed")?;
+    for item in checked.iter().filter(|i| i.selected) {
         anyhow::ensure!(
             item.importable,
-            "{} {} is not importable: {}",
+            "import {} from {}: resource is not importable: {}",
             item.kind.as_str(),
             item.path.display(),
             scan_warning_message(item.warning.as_deref())
         );
-        if !seen.insert((item.kind, item.digest.clone())) {
+        if !seen.insert((item.kind, item.comparison_digest.clone())) {
             continue;
         }
         let base = item
             .source_key
             .as_deref()
-            .and_then(|key| key.strip_prefix("server:"))
+            .and_then(|key| {
+                key.strip_prefix("server:")
+                    .or_else(|| key.strip_prefix("rule:"))
+            })
             .or_else(|| item.path.file_stem().and_then(|s| s.to_str()))
             .unwrap_or(item.kind.as_str());
         let id = unique_id(paths, item.kind, &slug(base));
@@ -610,23 +631,19 @@ pub fn import_scan_items(paths: &AgentHubPaths, items: &[ScanItem]) -> Result<Ve
                     )?;
                 }
                 CapabilityKind::Rule => {
-                    let dest = paths.rules.join(&id);
-                    fs::create_dir_all(&dest)?;
-                    let body = if item.path.is_file() {
-                        fs::read(&item.path)?
-                    } else {
-                        Vec::new()
-                    };
-                    fs::write(dest.join("rule.md"), body)?;
-                    fs::write(
-                        dest.join("rule.json"),
-                        serde_json::to_vec_pretty(
-                            &serde_json::json!({"schemaVersion":1,"id":id,"activation":"always","paths":[],"targets":["cursor","codex","claude"]}),
-                        )?,
-                    )?;
+                    let content=crate::rule_projection::content(&crate::rule_projection::source_body(item)?,&item.source)?;
+                    save_rule(paths,&RuleDocument{schema_version:1,id:id.clone(),display_name:base.into(),activation:content.activation,paths:content.paths,targets:Target::HOSTS.to_vec(),body:content.body},true)?;
                 }
                 CapabilityKind::Mcp => import_mcp(paths, item, &id)?,
             }
+            let current_digest=match item.kind {
+                CapabilityKind::Skill => crate::skill_content::inspect(&item.path)?.digest,
+                CapabilityKind::Mcp => sha256(&serde_json::to_vec(&crate::comparison::read_mcp(item)?)?),
+                _ => tree_digest(&item.path)?,
+            };
+            anyhow::ensure!(current_digest==item.digest,"source changed during import; scan again");
+            let destination=match item.kind {CapabilityKind::Skill=>&paths.skills,CapabilityKind::Mcp=>&paths.mcp,CapabilityKind::Rule=>&paths.rules,CapabilityKind::Plugin=>&paths.plugins}.join(&id);
+            anyhow::ensure!(crate::comparison::canonical_digest(item.kind,&destination)? == crate::comparison::scan_digest(item)?, "imported content differs from scanned content");
             Ok(())
         })()
         .with_context(|| {

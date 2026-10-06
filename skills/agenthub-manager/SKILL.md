@@ -9,7 +9,7 @@ AgentHub maintains a portable content library at `~/.agenthub` (`AGENTHUB_HOME` 
 
 ## Locate the installed command
 
-The complete installer includes the UI, CLI and this skill; users do not need a second CLI download. Read [installation and command discovery](references/installation.md) if `agenthub` is unavailable, on Windows with an old process PATH, or with a portable ZIP. The bundled `scripts/agenthub.ps1` locates the executable and forwards arguments and exit codes. Confirm `--version` and `--help`; examples below use `agenthub` to mean that resolved executable. The UI does not need to be running.
+The complete installer includes the UI and CLI; users do not need a second CLI download. This Skill is an optional separate download, copied manually only on request. Read [installation and command discovery](references/installation.md) if `agenthub` is unavailable, on Windows with an old process PATH, or with a portable ZIP. The bundled `scripts/agenthub.ps1` locates the executable and forwards arguments and exit codes. Confirm `--version` and `--help`; examples below use `agenthub` to mean that resolved executable. The UI does not need to be running.
 
 ## Inspect before changing
 
@@ -22,10 +22,10 @@ The complete installer includes the UI, CLI and this skill; users do not need a 
 | Workflow | Available interface |
 | --- | --- |
 | Inventory, validation, selected Plan/Apply, saved automatic runs | CLI |
-| Local versions, remote connection/sync, content restore, host rollback | CLI |
+| Local versions, capability changes, reviewed discard/remote content recovery, remote connection/sync, host rollback | CLI |
 | First initialization | Desktop selection, or CLI `init --empty` / explicitly authorized `init --import-all` |
 | Later selected import, bulk library deletion, host cleanup, reset | Desktop |
-| Enable/edit automatic scope and import/strict policies | Desktop |
+| Enable/edit automatic scope, preserve/replace mode and reverse-import policy | Desktop |
 | Skill/content editing and Git conflict resolution | Canonical files + validation; reviewed native Git for conflicts |
 
 Do not claim the CLI exposes every Desktop operation. Do not edit SQLite to simulate missing commands. `target enable` is device bookkeeping, not automatic-sync authorization. Read [backup migration](references/migration.md) before replacing an existing backup workflow or onboarding another device.
@@ -40,11 +40,11 @@ Do not claim the CLI exposes every Desktop operation. Do not edit SQLite to simu
 
 ## Synchronize hosts
 
-Use Desktop **Sync to tools** to choose target/scope and review named changes. Plan is read-only; Apply backs up, writes, verifies and rolls back on failure. Host extras in managed domains may be deleted. Preserve unrelated tool settings and protected stores.
+Use Desktop **Sync to tools** to choose target/scope and review named changes. Plan is read-only; Apply backs up, writes, verifies and rolls back on failure. Preserve mode retains every unselected host capability. Replace mode may delete extras only in managed categories after review. Preserve unrelated tool settings and protected stores.
 
 For CLI, prefer `agenthub plan <agents|cursor|codex|claude> --selection <scope.json> --json`; read [selection and recovery](references/selection.md) for the JSON shape and replacement consequences. Without `--selection`, Plan covers all compatible content. Review the exact ID, resources, deletions and warnings, then apply the authorized preview with `agenthub sync <target> --plan-id <id> --confirm`. Never bypass a stale-plan failure.
 
-An enabled automatic profile authorizes subsequent mutations within its saved target/scope. External Canonical edits need `agenthub auto-sync run`; it runs only saved profiles and does not import host changes. Read [selection and recovery](references/selection.md) for domain semantics and rollback.
+An enabled automatic profile authorizes subsequent mutations within its saved target/scope. External Canonical edits are not watched: save an authorized version (which runs enabled profiles), or use `agenthub auto-sync run` for delivery without a version save; it runs only saved profiles and does not import host changes. Read [selection and recovery](references/selection.md) for domain semantics and rollback.
 
 ## Save and share versions
 
@@ -52,7 +52,9 @@ On a new device, choose Desktop **Restore an existing AgentHub library** instead
 
 Run `agenthub validate --json`, review `agenthub git status` and `agenthub git diff` locally without exposing credential contents, then use a user-approved `agenthub git commit --message "..."`. Read its JSON result: local success is separate from remote success; a remote error is not permission to create repeated local commits. Read [portable storage and remote synchronization](references/storage.md) before connecting/authenticating or explaining what travels between devices. For an actual conflict, read [conflict resolution](references/conflicts.md): ordinary sync aborts its merge, so establish a reviewed merge before editing conflict stages. Do not choose one device's content silently.
 
-Remote reception and native Git commits do not update hosts. Review a new host Plan or run only the user's previously enabled automatic profiles when that delivery is authorized. Direct filesystem edits are also not automatically uploaded; a version save triggers connected remote synchronization.
+`agenthub git commit` saves locally, reconciles/uploads when connected, and runs already-enabled device profiles. `agenthub git sync` runs those profiles when received library content changes; native Git commits do not. Recovery operations and `git receive` never write hosts. Direct filesystem edits are also not automatically uploaded; a version save triggers connected remote synchronization.
+
+For unsaved changes, staged edits, discard or choosing cloud content over local content, read [version review and recovery](references/versions.md). Use the preview/apply commands, not an unchecked reset, clean or force-push.
 
 ## Recovery and reset
 
@@ -65,3 +67,5 @@ Never print secrets or include them in chat, logs, diffs, or examples. Recogniza
 HTTPS sign-in is available in the desktop for GitHub and self-hosted Git/Gitea; its encrypted credentials are shared with CLI. Do not ask the user to provide access tokens in chat or command arguments. `git login <URL> --username <name> --branch <branch>` reads a token only from stdin for direct user-controlled setup. Login verifies reading, not write permission. Inspect `remote-status` verification state, not merely the presence of a URL.
 
 The desktop automatically checks read-only Skill differences for existing library IDs across Shared Agents, Cursor, Codex and Claude Code at a two-minute maximum frequency while visible. Red reminders open explicit reverse-import review; no CLI watcher or automatic reverse import is exposed. Imported changed copies retain originals and receive unique IDs. Do not treat opening a reminder as saving or synchronizing a version.
+
+New synchronization scopes default to `preserve`, not destructive replacement. Read [selection](references/selection.md) before projecting any resources. New Rules stay in the library until explicitly selected. Do not fabricate automatic installation of this Skill or tool rules. For download-only library updates, use `agenthub git receive`; it validates incoming content without pushing or touching tools.

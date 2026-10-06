@@ -39,7 +39,7 @@ import {
   Upload,
   UserRound,
 } from "lucide-react";
-import { api, type AutoSyncProfile, type Capability, type CapabilityDetail, type CapabilityMutationResult, type Dashboard, type GitIdentity, type HostResource, type Kind, type Plan, type PolicySettings, type RuleDocument, type RuntimeDiagnostics, type RemoteSettings, type ScanItem, type SyncSelection, type Target, type Transaction } from "./lib/api";
+import { api, type AutoSyncProfile, type Capability, type CapabilityDetail, type CapabilityChange, type VersionPreview, type CapabilityMutationResult, type Dashboard, type GitIdentity, type HostResource, type Kind, type Plan, type PolicySettings, type RuleDocument, type RuntimeDiagnostics, type RemoteSettings, type ScanItem, type SyncSelection, type Target, type Transaction } from "./lib/api";
 import { t } from "./lib/i18n";
 import agentHubLogo from "./assets/agenthub-logo.png";
 import { Button, Dialog, PageHeader, SearchField, StatusBadge, Toast } from "./components/ui";
@@ -77,12 +77,16 @@ const fullSelection = (items: Capability[], authoritative = false, target: Targe
   mcp_managed: target !== "agents",
   mcp: target === "agents" ? [] : items.filter((item) => item.kind === "mcp").map((item) => item.id),
   rules_managed: target !== "agents",
-  rules: target !== "agents" && items.some((item) => item.kind === "rule"),
-  authoritative,
+  rules: false,
+  authoritative: false,
+  mode: authoritative ? "replace" : "preserve",
+  rule_ids: target === "agents" ? [] : items.filter((item) => item.kind === "rule").map((item) => item.id),
 });
-const hasSelection = (selection: SyncSelection) => selection.skills_managed || selection.plugins_managed || selection.mcp_managed || selection.rules_managed || selection.skills.length + selection.plugins.length + selection.mcp.length > 0 || selection.rules;
+const hasSelection = (selection: SyncSelection) => selection.skills_managed || selection.plugins_managed || selection.mcp_managed || selection.rules_managed || selection.skills.length + selection.plugins.length + selection.mcp.length + (selection.rule_ids?.length ?? 0) > 0;
 const sameIds = (left: string[], right: string[]) => JSON.stringify([...left].sort()) === JSON.stringify([...right].sort());
 const sameSelection = (left?: SyncSelection | null, right?: SyncSelection | null) => Boolean(left && right
+  && (left.mode ?? "preserve") === (right.mode ?? "preserve")
+  && sameIds(left.rule_ids ?? [], right.rule_ids ?? [])
   && left.rules === right.rules
   && left.rules_managed === right.rules_managed
   && left.skills_managed === right.skills_managed
@@ -192,7 +196,7 @@ export default function App() {
     inventory: <Inventory onChanged={refresh} onNotify={setToast} skillChanges={skillChanges} />,
     hosts: <HostResources onNotify={setToast} />,
     sync: <Sync onApplied={refresh} onNotify={setToast} />,
-    git: <GitPage onCommitted={() => { setToast(t("toast.committed")); refresh(); }} />,
+    git: <GitPage onRecovered={() => void refresh()} onCommitted={() => { setToast(t("toast.committed")); refresh(); }} />,
     transactions: <Transactions data={dashboard} onChanged={refresh} onNotify={setToast} />,
     settings: <SettingsPage data={dashboard} onReset={(path) => { setResetRecovery(path); setPage("overview"); void refresh(); }} />,
   }[page];
@@ -412,9 +416,9 @@ function Inventory({ onChanged, onNotify, skillChanges }: { onChanged: () => voi
     setScanItems(skillChanges.changes.filter((change) => !id || change.canonical_id === id).map((change) => change.item));
     setChangeReview(true); setScanSelected(new Set()); setScanSource("all"); setScanKind("skill");
   };
-  const canonicalDigests = useMemo(() => new Set(items.map((item) => `${item.kind}:${item.digest}`)), [items]);
+  const canonicalDigests = useMemo(() => new Set(items.map((item) => `${item.kind}:${item.comparison_digest ?? item.digest}`)), [items]);
   const visibleScanItems = (scanItems ?? []).filter((item) => item.kind === scanKind && (scanSource === "all" || item.source === scanSource));
-  const scanImportableItems = (scanItems ?? []).filter((item) => item.importable && !canonicalDigests.has(`${item.kind}:${item.digest}`));
+  const scanImportableItems = (scanItems ?? []).filter((item) => item.importable && !canonicalDigests.has(`${item.kind}:${item.comparison_digest ?? item.digest}`));
 
   return (
     <>
@@ -463,7 +467,7 @@ function Inventory({ onChanged, onNotify, skillChanges }: { onChanged: () => voi
                         <strong>{item.display_name}</strong>
                         <small>{item.path}</small>
                       </span>
-                      <code title={t("inventory.digest")}>{item.digest.slice(0, 8)}</code>
+                      {item.duplicate_of && <span className="source-pill source-pill--constraint">{t("inventory.duplicateOf")} {item.duplicate_of}</span>}<code title={t("inventory.digest")}>{item.digest.slice(0, 8)}</code>
                       <ChevronRight size={15} />
                     </button>
                     {id === "skill" && skillChanges.changes.some((change) => change.canonical_id === item.id) && <button type="button" className="skill-change-trigger" disabled={scanBusy} aria-label={`${t("inventory.reviewSkillChanges")} ${item.display_name}`} title={t("inventory.skillChanges")} onClick={() => reviewChanges(item.id)}><span className="skill-change-dot" aria-hidden="true" /></button>}
@@ -503,7 +507,7 @@ function Inventory({ onChanged, onNotify, skillChanges }: { onChanged: () => voi
         <div className="scan-group-toolbar"><span>{visibleScanItems.length} {t("init.discovered")}</span><Button variant="quiet" disabled={scanBusy || !scanImportableItems.some((item) => item.kind === scanKind && (scanSource === "all" || item.source === scanSource))} onClick={() => setScanSelected((current) => { const next = new Set(current); const available = scanImportableItems.filter((item) => item.kind === scanKind && (scanSource === "all" || item.source === scanSource)); const allSelected = available.every((item) => next.has(item.id)); available.forEach((item) => allSelected ? next.delete(item.id) : next.add(item.id)); return next; })}>{t("init.selectGroup")}</Button></div>
         <div className="scan-list scan-list--dialog">
           {visibleScanItems.length === 0 && <EmptyState icon={Boxes} title={t("init.emptyGroup")} body={t("init.emptyGroupHint")} compact />}
-          {visibleScanItems.map((item) => { const exists = canonicalDigests.has(`${item.kind}:${item.digest}`); const disabled = !item.importable || exists; const checked = scanSelected.has(item.id); const name = item.source_key?.replace(/^server:/, "") ?? item.path.split(/[\\/]/).pop(); return <label className={`${checked ? "is-selected" : ""} ${disabled ? "is-disabled" : ""}`} key={item.id}><input type="checkbox" checked={checked} disabled={scanBusy || disabled} onChange={() => setScanSelected((current) => { const next = new Set(current); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next; })} /><span className="scan-check">{disabled ? <AlertTriangle size={15} /> : <CheckCircle2 size={17} />}</span><span className="scan-copy"><strong>{name}</strong><small><b>{item.source}</b><span>{item.path}</span></small>{exists && <em>{t("inventory.alreadyCanonical")}</em>}{!exists && <ScanWarning item={item} />}</span><code>{item.digest.slice(0, 8)}</code></label>; })}
+          {visibleScanItems.map((item) => { const exists = canonicalDigests.has(`${item.kind}:${item.comparison_digest ?? item.digest}`); const disabled = !item.importable || exists; const checked = scanSelected.has(item.id); const name = item.source_key?.replace(/^(server|rule):/, "") ?? item.path.split(/[\\/]/).pop(); return <label className={`${checked ? "is-selected" : ""} ${disabled ? "is-disabled" : ""}`} key={item.id}><input type="checkbox" checked={checked} disabled={scanBusy || disabled} onChange={() => setScanSelected((current) => { const next = new Set(current); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next; })} /><span className="scan-check">{disabled ? <AlertTriangle size={15} /> : <CheckCircle2 size={17} />}</span><span className="scan-copy"><strong>{name}</strong><small><b>{item.source}</b><span>{item.path}</span></small>{exists && <em>{t("inventory.alreadyCanonical")}</em>}{!exists && <ScanWarning item={item} />}</span><code>{item.digest.slice(0, 8)}</code></label>; })}
         </div>
       </Dialog>
     </>
@@ -545,7 +549,7 @@ function HostResources({ onNotify }: { onNotify: (message: string) => void }) {
     <div className="target-tabs host-target-tabs" role="tablist" aria-label={t("hosts.chooseTarget")}>{targetMeta.map((meta) => <button type="button" role="tab" aria-selected={target === meta.id} className={target === meta.id ? "is-selected" : ""} onClick={() => { if (deleting) return; setConfirming(false); setAcknowledged(false); setTarget(meta.id); }} key={meta.id}><span className="target-tab__mark">{meta.mark}</span><span><strong>{t(`targets.${meta.id}`)}</strong><small>{meta.description}</small></span><CheckCircle2 size={17} /></button>)}</div>
     <div className="host-legend"><span className="source-pill source-pill--canonical">{t("hosts.canonicalMatch")}</span><span className="source-pill source-pill--host">{t("hosts.hostOnly")}</span><span className="source-pill source-pill--constraint">{t("hosts.constraint")}</span><p>{t("hosts.legendHint")}</p></div>
     {error && <div className="inline-error" role="alert"><Activity size={18} /><span>{error}</span></div>}
-    {loading ? <div className="material host-loading"><span className="spinner" /><p>{t("hosts.scanning")}</p></div> : <div className="inventory-grid host-grid">{kindMeta.map(({ id, icon: KindIcon, accent }) => { const group = items.filter((item) => item.kind === id); return <section className={`material inventory-card inventory-card--${accent}`} key={id}><header className="inventory-card__header"><span className="inventory-card__icon"><KindIcon size={20} /></span><div><h2>{t(`kinds.${id}`)}</h2><p>{group.length} {t("hosts.resources")}</p></div><span className="count-badge">{group.length}</span></header><div className="host-resource-list">{group.map((item) => <label className={`${selected.has(item.id) ? "is-selected" : ""} ${!item.deletable ? "is-protected" : ""}`} key={item.id}><input type="checkbox" disabled={!item.deletable || deleting} checked={selected.has(item.id)} onChange={() => setSelected((current) => { const next = new Set(current); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next; })} /><span className="host-resource__icon">{item.deletable ? <CheckCircle2 size={17} /> : <ShieldCheck size={17} />}</span><span className="host-resource__copy"><strong>{item.display_name}</strong><code>{item.path}</code><small>{item.canonical_id ? `${t("hosts.canonicalId")}: ${item.canonical_id}` : item.constraint ? t(`hosts.constraints.${item.constraint}`) : t("hosts.notCanonical")}</small></span><span className={`source-pill source-pill--${item.relation === "canonical_match" ? "canonical" : item.relation === "host_only" ? "host" : "constraint"}`}>{t(`hosts.relations.${item.relation}`)}</span></label>)}{!group.length && <EmptyState icon={KindIcon} title={t("hosts.empty")} body={t("hosts.emptyHint")} compact />}</div></section>; })}</div>}
+    {loading ? <div className="material host-loading"><span className="spinner" /><p>{t("hosts.scanning")}</p></div> : <div className="inventory-grid host-grid">{kindMeta.map(({ id, icon: KindIcon, accent }) => { const group = items.filter((item) => item.kind === id); return <section className={`material inventory-card inventory-card--${accent}`} key={id}><header className="inventory-card__header"><span className="inventory-card__icon"><KindIcon size={20} /></span><div><h2>{t(`kinds.${id}`)}</h2><p>{group.length} {t("hosts.resources")}</p></div><span className="count-badge">{group.length}</span></header><div className="host-resource-list">{group.map((item) => <label className={`${selected.has(item.id) ? "is-selected" : ""} ${!item.deletable ? "is-protected" : ""}`} key={item.id}><input type="checkbox" disabled={!item.deletable || deleting} checked={selected.has(item.id)} onChange={() => setSelected((current) => { const next = new Set(current); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next; })} /><span className="host-resource__icon">{item.deletable ? <CheckCircle2 size={17} /> : <ShieldCheck size={17} />}</span><span className="host-resource__copy"><strong>{item.display_name}</strong><code>{item.path}</code><small>{item.canonical_id ? `${t("hosts.canonicalId")}: ${item.canonical_id}` : item.constraint ? t(`hosts.constraints.${item.constraint}`) : item.relation === "generated" ? t("hosts.relations.generated") : t("hosts.notCanonical")}</small></span><span className={`source-pill source-pill--${item.relation === "canonical_match" ? "canonical" : item.relation === "host_only" ? "host" : "constraint"}`}>{t(`hosts.relations.${item.relation}`)}</span></label>)}{!group.length && <EmptyState icon={KindIcon} title={t("hosts.empty")} body={t("hosts.emptyHint")} compact />}</div></section>; })}</div>}
     {selected.size > 0 && <div className="host-cleanup-bar"><div><strong>{selected.size} {t("hosts.selected")}</strong><span>{t("hosts.cleanupHint")}</span></div><span className="host-cleanup-bar__actions"><Button variant="secondary" disabled={deleting} onClick={() => setSelected(new Set())}>{t("hosts.clearSelection")}</Button><Button variant="danger" disabled={deleting} onClick={openConfirm}><Trash2 size={16} />{t("hosts.deleteSelected")}</Button></span></div>}
     <Dialog open={confirming} onClose={() => !deleting && setConfirming(false)} title={t("hosts.deleteTitle")} actions={<><Button variant="secondary" disabled={deleting} onClick={() => setConfirming(false)}>{t("common.cancel")}</Button><Button variant="danger" disabled={deleting || !acknowledged || !chosen.length} onClick={() => void remove()}>{deleting ? <RefreshCw className="spin" size={16} /> : <Trash2 size={16} />}{t("hosts.deleteAction")}</Button></>}><p>{t("hosts.deleteBody")}</p><p>{t("hosts.protectedHint")}</p><div className="host-delete-preview">{chosen.map((item) => <span key={item.id}><strong>{item.display_name}</strong><code>{item.path}</code></span>)}</div>{chosen.some((item) => item.relation === "canonical_match") && <div className="warning-banner"><AlertTriangle size={17} /><span>{t("hosts.driftWarning")}</span></div>}<label className="confirm-ack"><input type="checkbox" checked={acknowledged} disabled={deleting} onChange={(event) => setAcknowledged(event.target.checked)} /><span>{chosen.length} · {t("hosts.cleanupAck")}</span></label></Dialog>
   </>;
@@ -688,6 +692,10 @@ function Sync({ onApplied, onNotify }: { onApplied: () => void; onNotify: (messa
         changes.set(key, { kind: step.capability_kind, id, action, files: 1 });
       }
     }
+    for (const item of plan?.removed_resources ?? []) {
+      const id = item.id === "__user_text__" ? t("sync.userRuleText") : item.id;
+      changes.set(`${item.kind}:${id}`, { kind: item.kind, id, action: "delete", files: 0 });
+    }
     return [...changes.values()].sort((left, right) => `${left.kind}:${left.id}`.localeCompare(`${right.kind}:${right.id}`));
   }, [plan]);
   const affectedCapabilities = planSummary.reduce((sum, item) => sum + item.summary.affected, 0);
@@ -697,22 +705,22 @@ function Sync({ onApplied, onNotify }: { onApplied: () => void; onNotify: (messa
       setProfiles(nextProfiles);
       setPolicy(nextPolicy);
       const saved = nextProfiles.find((profile) => profile.target === target);
-      setSelection(nextPolicy.strict_authoritative ? fullSelection(items, true, target) : saved && hasSelection(saved.selection) ? saved.selection : fullSelection(items, false, target));
+      setSelection(saved && hasSelection(saved.selection) ? saved.selection : { ...fullSelection(items, false, target), mode: nextPolicy.sync_mode ?? "preserve", rules_managed: false, rule_ids: [] });
     }).catch((value) => setError(String(value)));
   }, [target]);
   const currentProfile = profiles.find((profile) => profile.target === target);
   const autoEnabled = Boolean(currentProfile?.enabled);
   const scopeChanged = autoEnabled && !sameSelection(selection, currentProfile?.selection);
   const selectionItems = useMemo(() => inventory.filter((item) => `${item.id} ${item.display_name}`.toLowerCase().includes(selectionQuery.toLowerCase())), [inventory, selectionQuery]);
-  const selectedCount = selection ? selection.skills.length + selection.plugins.length + selection.mcp.length + (selection.rules ? inventory.filter((item) => item.kind === "rule").length : 0) : 0;
-  const profileSelectionCount = (profile?: AutoSyncProfile) => profile ? profile.selection.skills.length + profile.selection.plugins.length + profile.selection.mcp.length + (profile.selection.rules ? inventory.filter((item) => item.kind === "rule").length : 0) : 0;
-  const visibleKinds: Array<"skill" | "plugin" | "mcp"> = target === "agents" ? ["skill"] : ["skill", "plugin", "mcp"];
+  const selectedCount = selection ? selection.skills.length + selection.plugins.length + selection.mcp.length + (selection.rule_ids?.length ?? 0) : 0;
+  const profileSelectionCount = (profile?: AutoSyncProfile) => profile ? profile.selection.skills.length + profile.selection.plugins.length + profile.selection.mcp.length + (profile.selection.rule_ids?.length ?? 0) : 0;
+  const visibleKinds: Array<Kind> = target === "agents" ? ["skill"] : ["skill", "plugin", "mcp", "rule"];
   const toggleCapability = (item: Capability) => {
     if (!selection) return;
     if (item.kind === "plugin" && target !== "cursor") return;
-    const key = item.kind === "skill" ? "skills" : item.kind === "plugin" ? "plugins" : "mcp";
-    const managedKey = `${key}_managed` as "skills_managed" | "plugins_managed" | "mcp_managed";
-    const values = selection[key];
+    const key = item.kind === "skill" ? "skills" : item.kind === "plugin" ? "plugins" : item.kind === "rule" ? "rule_ids" : "mcp";
+    const managedKey = (key === "rule_ids" ? "rules_managed" : `${key}_managed`) as "skills_managed" | "plugins_managed" | "mcp_managed" | "rules_managed";
+    const values = selection[key] ?? [];
     setSelection({ ...selection, [managedKey]: true, [key]: values.includes(item.id) ? values.filter((id) => id !== item.id) : [...values, item.id] });
     setPlan(null);
   };
@@ -720,7 +728,7 @@ function Sync({ onApplied, onNotify }: { onApplied: () => void; onNotify: (messa
     setTarget(nextTarget);
     setPlan(null);
     const saved = profiles.find((profile) => profile.target === nextTarget);
-    setSelection(policy.strict_authoritative ? fullSelection(inventory, true, nextTarget) : saved && hasSelection(saved.selection) ? saved.selection : fullSelection(inventory, false, nextTarget));
+    setSelection(saved && hasSelection(saved.selection) ? saved.selection : { ...fullSelection(inventory, false, nextTarget), mode: policy.sync_mode ?? "preserve", rules_managed: false, rule_ids: [] });
   };
 
   const makePlan = async () => {
@@ -746,6 +754,15 @@ function Sync({ onApplied, onNotify }: { onApplied: () => void; onNotify: (messa
       onNotify(t("toast.applied"));
     } catch (value) { void api.debugEvent("sync_apply_failed", `target=${target} plan=${plan.id}`); setError(String(value)); } finally { setBusy(false); }
   };
+  const reviewAutoSync = async () => {
+    if (!selection) return;
+    if (selection.mode === "replace") {
+      setBusy(true); setError("");
+      try { setPlan(await api.plan(target, selection)); setConfirm("enable_auto"); }
+      catch (value) { setError(String(value)); }
+      finally { setBusy(false); }
+    } else { setConfirm("enable_auto"); }
+  };
   const configureAutoSync = async (enabled: boolean) => {
     if (!selection) return;
     setBusy(true);
@@ -753,7 +770,7 @@ function Sync({ onApplied, onNotify }: { onApplied: () => void; onNotify: (messa
     void api.debugEvent("auto_sync_configure_click", `target=${target} enabled=${enabled} selected=${selectedCount}`);
     try {
       const effectiveSelection = enabled ? selection : currentProfile?.selection ?? selection;
-      const result = await api.setAutoSync(target, effectiveSelection, enabled);
+      const result = await api.setAutoSync(target, effectiveSelection, enabled, enabled && effectiveSelection.mode === "replace" ? plan?.id : undefined);
       setProfiles((current) => [...current.filter((profile) => profile.target !== target), result.profile]);
       setConfirm(null);
       setPlan(null);
@@ -798,29 +815,31 @@ function Sync({ onApplied, onNotify }: { onApplied: () => void; onNotify: (messa
         <section className="material sync-selection">
           <header className="sync-selection__header">
             <div><p className="eyebrow">SYNC SCOPE</p><h2>{t("sync.scopeTitle")}</h2><p>{target === "agents" ? t("sync.agentsHint") : t("sync.scopeHint")}</p></div>
-            <StatusBadge tone={policy.strict_authoritative ? "warning" : "ok"}>{policy.strict_authoritative ? t("sync.strictActive") : `${selectedCount} / ${inventory.length} ${t("sync.selected")}`}</StatusBadge>
+            <StatusBadge tone={selection?.mode === "replace" ? "warning" : "ok"}>{`${selectedCount} / ${inventory.length} ${t("sync.selected")}`}</StatusBadge>
           </header>
           <div className="sync-selection__toolbar">
             <SearchField value={selectionQuery} onChange={setSelectionQuery} />
-            <Button variant="quiet" disabled={!selection || policy.strict_authoritative} onClick={() => setSelection(fullSelection(inventory, false, target))}>{t("sync.selectAll")}</Button>
-            <Button variant="quiet" disabled={!selection || policy.strict_authoritative} onClick={() => selection && setSelection({ ...selection, skills_managed: true, skills: [], plugins_managed: target === "cursor", plugins: [], mcp_managed: target !== "agents", mcp: [], rules_managed: target !== "agents", rules: false, authoritative: false })}>{t("sync.clearManaged")}</Button>
+            <Button variant="quiet" disabled={!selection} onClick={() => { setSelection({ ...fullSelection(inventory, false, target), mode: selection?.mode ?? "preserve" }); setPlan(null); }}>{t("sync.selectAll")}</Button>
+            <Button variant="quiet" disabled={!selection} onClick={() => { setPlan(null); if (selection) setSelection({ ...selection, skills_managed: true, skills: [], plugins_managed: target === "cursor", plugins: [], mcp_managed: target !== "agents", mcp: [], rules_managed: target !== "agents", rules: false, rule_ids: [], authoritative: false }); }}>{t("sync.clearManaged")}</Button>
           </div>
-          <p className="scope-impact-note"><ShieldCheck size={15} />{t("sync.scopeDeleteHint")}</p>
+          <SyncModePicker value={selection?.mode ?? "preserve"} disabled={busy} onChange={(mode) => { if (selection) setSelection({ ...selection, mode }); setPlan(null); }} />
+          {currentProfile?.needs_review && <p className="warning-banner" role="status">{t("sync.needsReview")}</p>}
+          <p className="scope-impact-note"><ShieldCheck size={15} />{t(selection?.mode === "replace" ? "sync.replaceHint" : "sync.preserveHint")}</p>
           <div className="sync-selection__groups">
             {visibleKinds.map((kind) => {
               const items = selectionItems.filter((item) => item.kind === kind);
-              const key = kind === "skill" ? "skills" : kind === "plugin" ? "plugins" : "mcp";
-              const managedKey = `${key}_managed` as "skills_managed" | "plugins_managed" | "mcp_managed";
+              const key = kind === "skill" ? "skills" : kind === "plugin" ? "plugins" : kind === "rule" ? "rule_ids" : "mcp";
+              const managedKey = (key === "rule_ids" ? "rules_managed" : `${key}_managed`) as "skills_managed" | "plugins_managed" | "mcp_managed" | "rules_managed";
               const selected = selection?.[key] ?? [];
               const locked = kind === "plugin" && target !== "cursor";
-              const managed = !locked && Boolean(selection?.authoritative || selection?.[managedKey] || selected.length);
-              return <details open key={kind} className={`sync-selection__group ${managed ? "is-managed" : ""} ${locked ? "is-locked" : ""}`}><summary><span>{t(`kinds.${kind}`)}</span><small>{locked ? t("sync.cliManaged") : managed ? `${selected.length} / ${inventory.filter((item) => item.kind === kind).length}` : t("sync.notManaged")}</small></summary><div onWheel={handoffBoundaryWheel}>{locked ? <div className="sync-domain-constraint"><ShieldCheck size={16} /><span>{t(target === "claude" ? "sync.claudePluginConstraint" : "sync.codexPluginConstraint")}</span></div> : <><label className={`sync-domain-toggle ${managed ? "is-selected" : ""}`}><input type="checkbox" checked={managed} disabled={policy.strict_authoritative} onChange={() => selection && setSelection({ ...selection, [managedKey]: !managed, authoritative: false })} /><span className="sync-selection__check"><CheckCircle2 size={15} /></span><span><strong>{t("sync.manageDomain")}</strong><small>{managed ? t("sync.emptyMeansClear") : t("sync.domainUntouched")}</small></span></label>{items.map((item) => <label key={item.id} className={selected.includes(item.id) ? "is-selected" : ""}><input type="checkbox" disabled={!managed || policy.strict_authoritative} checked={selected.includes(item.id)} onChange={() => toggleCapability(item)} /><span className="sync-selection__check"><CheckCircle2 size={15} /></span><span><strong>{item.display_name}</strong><small>{item.id}</small></span></label>)}</>}</div></details>;
+              const managed = !locked && Boolean(selection?.[managedKey]);
+              return <details open key={kind} className={`sync-selection__group ${managed ? "is-managed" : ""} ${locked ? "is-locked" : ""}`}><summary><span>{t(`kinds.${kind}`)}</span><small>{locked ? t("sync.cliManaged") : managed ? `${selected.length} / ${inventory.filter((item) => item.kind === kind).length}` : t("sync.notManaged")}</small></summary><div onWheel={handoffBoundaryWheel}>{locked ? <div className="sync-domain-constraint"><ShieldCheck size={16} /><span>{t(target === "claude" ? "sync.claudePluginConstraint" : "sync.codexPluginConstraint")}</span></div> : <><label className={`sync-domain-toggle ${managed ? "is-selected" : ""}`}><input type="checkbox" checked={managed} disabled={busy} onChange={() => { if (selection) setSelection({ ...selection, [managedKey]: !managed, [key]: managed ? [] : selected, authoritative: false }); setPlan(null); }} /><span className="sync-selection__check"><CheckCircle2 size={15} /></span><span><strong>{t("sync.manageDomain")}</strong><small>{managed ? t(selection?.mode === "replace" ? "sync.emptyMeansClear" : "sync.preserveHint") : t("sync.domainUntouched")}</small></span></label>{items.map((item) => <label key={item.id} className={selected.includes(item.id) ? "is-selected" : ""}><input type="checkbox" disabled={!managed} checked={selected.includes(item.id)} onChange={() => toggleCapability(item)} /><span className="sync-selection__check"><CheckCircle2 size={15} /></span><span><strong>{item.display_name}</strong><small>{item.id}</small></span></label>)}</>}</div></details>;
             })}
-            {target !== "agents" && <label className={`sync-selection__rules ${selection?.rules_managed ? "is-selected" : ""}`}><input type="checkbox" checked={Boolean(selection?.rules_managed)} disabled={policy.strict_authoritative} onChange={() => { if (selection) { const managed = !selection.rules_managed; setSelection({ ...selection, rules_managed: managed, rules: managed, authoritative: false }); setPlan(null); } }} /><span className="sync-selection__check"><CheckCircle2 size={15} /></span><span><strong>{t("kinds.rule")}</strong><small>{selection?.rules_managed ? t("sync.rulesIncludedHint") : t("sync.domainUntouched")}</small></span><StatusBadge tone={selection?.rules_managed ? "ok" : "warning"}>{selection?.rules_managed ? t("sync.included") : t("sync.excluded")}</StatusBadge></label>}
+
           </div>
         </section>
 
-        <div className="warning-band"><ShieldCheck size={19} /><span>{t("sync.warning")}</span></div>
+        <div className="warning-band"><ShieldCheck size={19} /><span>{t(selection?.mode === "replace" ? "sync.warning" : "sync.preserveHint")}</span></div>
         {error && <div className="inline-error" role="alert"><Activity size={18} /><span>{error}</span></div>}
 
         <section className={`material plan-panel ${plan ? "has-plan" : ""}`}>
@@ -833,7 +852,7 @@ function Sync({ onApplied, onNotify }: { onApplied: () => void; onNotify: (messa
             </div>
             <div className="plan-panel__actions">
               <Button variant="secondary" onClick={makePlan} disabled={busy || !selection}>{busy ? <RefreshCw className="spin" size={17} /> : <Braces size={17} />} {busy ? t("sync.planning") : t("sync.plan")}</Button>
-              <Button onClick={() => setConfirm("enable_auto")} disabled={busy || !selection || !hasSelection(selection) || (autoEnabled && !scopeChanged)}><Radio size={17} /> {autoEnabled ? (scopeChanged ? t("sync.updateAuto") : t("sync.autoEnabled")) : t("sync.enableAuto")}</Button>
+              <Button onClick={reviewAutoSync} disabled={busy || !selection || !hasSelection(selection) || (autoEnabled && !scopeChanged)}><Radio size={17} /> {autoEnabled ? (scopeChanged ? t("sync.updateAuto") : t("sync.autoEnabled")) : t("sync.enableAuto")}</Button>
               {autoEnabled && <Button variant="quiet" onClick={() => setConfirm("disable_auto")} disabled={busy}>{t("sync.disableAuto")}</Button>}
             </div>
           </div>
@@ -905,14 +924,30 @@ function Sync({ onApplied, onNotify }: { onApplied: () => void; onNotify: (messa
       >
         <p>{t(confirm === "enable_auto" ? "sync.autoConfirmBody" : confirm === "disable_auto" ? "sync.disableAutoBody" : "sync.confirmBody")}</p>
         <div className="rollback-target"><span className="target-tab__mark">{targetMeta.find((item) => item.id === target)?.mark}</span><span><strong>{t(`targets.${target}`)}</strong><small>{selectedCount} {t("sync.selected")}</small></span></div>
-        {confirm === "enable_auto" && selection && <div className="auto-scope-review">{(["skill", "plugin", "mcp", "rule"] as Kind[]).map((kind) => { const ids = kind === "skill" ? selection.skills : kind === "plugin" ? selection.plugins : kind === "mcp" ? selection.mcp : selection.rules ? inventory.filter((item) => item.kind === "rule").map((item) => item.id) : []; return <section key={kind}><strong>{t(`kinds.${kind}`)}</strong><span>{ids.length ? ids.map((id) => inventory.find((item) => item.kind === kind && item.id === id)?.display_name ?? id).join("、") : t("sync.noneSelected")}</span></section>; })}</div>}
+        {confirm === "enable_auto" && selection && <div className="auto-scope-review">{(["skill", "plugin", "mcp", "rule"] as Kind[]).map((kind) => { const ids = kind === "skill" ? selection.skills : kind === "plugin" ? selection.plugins : kind === "mcp" ? selection.mcp : selection.rule_ids ?? []; return <section key={kind}><strong>{t(`kinds.${kind}`)}</strong><span>{ids.length ? ids.map((id) => inventory.find((item) => item.kind === kind && item.id === id)?.display_name ?? id).join("、") : t("sync.noneSelected")}</span></section>; })}</div>}
+        {confirm === "enable_auto" && selection?.mode === "replace" && <div className="auto-scope-review"><strong>{t("sync.delete")}</strong>{planCapabilityChanges.filter((item) => item.action === "delete").length ? planCapabilityChanges.filter((item) => item.action === "delete").map((item) => <section key={`${item.kind}:${item.id}`}><strong>{t(`kinds.${item.kind}`)}</strong><span>{item.id}</span></section>) : <p>{t("sync.noneSelected")}</p>}</div>}
         {confirm === "reviewed" && <code className="dialog-code">{plan?.id}</code>}
       </Dialog>
     </>
   );
 }
 
-function GitPage({ onCommitted }: { onCommitted: () => void }) {
+function VersionChangeList({ changes }: { changes: CapabilityChange[] }) {
+  if (!changes.length) return <p className="commit-clean">{t("git.noDiff")}</p>;
+  return <div className="version-capability-changes">{([...kindMeta.map((item) => item.id), "library"] as const).map((kind) => {
+    const items = changes.filter((item) => (item.kind ?? "library") === kind);
+    if (!items.length) return null;
+    return <section key={kind}><h3>{kind === "library" ? t("git.libraryConfig") : t(`kinds.${kind}`)} <span className="count-badge">{items.length}</span></h3>{items.map((item) => <details key={item.id}><summary><ChevronRight size={15} /><span className={`action-mark action-mark--${item.action}`}>{t(`sync.${item.action}`)}</span><strong>{item.id}</strong><small>{item.files.length} {t("sync.files")}</small></summary><ul>{item.files.map((file) => <li key={file}><code>{file}</code></li>)}</ul></details>)}</section>;
+  })}</div>;
+}
+
+function GitPage({ onCommitted, onRecovered }: { onCommitted: () => void; onRecovered: () => void }) {
+  const [changes, setChanges] = useState<CapabilityChange[]>([]);
+  const [changesError, setChangesError] = useState("");
+  const [recovery, setRecovery] = useState<VersionPreview | null>(null);
+  const [confirmation, setConfirmation] = useState("");
+  const [recoveryError, setRecoveryError] = useState("");
+  const [recoveryNotice, setRecoveryNotice] = useState("");
   const [status, setStatus] = useState("");
   const [diff, setDiff] = useState("");
   const [history, setHistory] = useState("");
@@ -938,7 +973,7 @@ function GitPage({ onCommitted }: { onCommitted: () => void }) {
     try {
       if (action === "connect") { setRemote(await api.connectRemote(remoteUrl.trim(), remoteBranch.trim())); setRemoteNotice(t("git.connected")); }
       else if (action === "disconnect") { await api.disconnectRemote(); setRemote({ branch: remoteBranch }); }
-      else { await api.syncRemote(); await load(); onCommitted(); setRemoteNotice(t("git.synced")); }
+      else { await receiveAndRefresh(); }
     } catch (value) {
       setRemoteError(String(value));
       const next = await api.remoteSettings().catch(() => remote);
@@ -958,9 +993,16 @@ function GitPage({ onCommitted }: { onCommitted: () => void }) {
     setRemote(nextRemote); setRemoteUrl(nextRemote.url ?? ""); setRemoteBranch(nextRemote.branch);
     setStatus(nextStatus); setDiff(nextDiff); setHistory(nextHistory); setIdentity(nextIdentity);
     setName(nextIdentity.name ?? ""); setEmail(nextIdentity.email ?? "");
+    try { setChanges(await api.gitChanges()); setChangesError(""); }
+    catch (value) { setChanges([]); setChangesError(String(value)); }
   }, []);
   useEffect(() => { void load().catch((value) => setError(String(value))); }, [load]);
   const dirty = Boolean(diff.trim()) || status.split("\n").some((line) => /^[ MARC?D!U]{1,2}\s/.test(line));
+  const receiveAndRefresh = async () => {
+    const result = await api.syncRemote();
+    setError(result?.auto_sync_error ?? result?.auto_sync?.filter((outcome) => outcome.error).map((outcome) => `${t(`targets.${outcome.target}`)}: ${outcome.error}`).join("\n") ?? "");
+    await load(); onCommitted(); setRemoteNotice(t("git.synced"));
+  };
   const commit = async (event: FormEvent) => {
     event.preventDefault(); setError("");
     if (!message.trim()) { setError(t("inventory.required")); return; }
@@ -970,6 +1012,7 @@ function GitPage({ onCommitted }: { onCommitted: () => void }) {
       const result = await api.gitCommit(message.trim(), identity.name ? undefined : name.trim(), identity.email ? undefined : email.trim());
       setRemoteError(result.remote_error ? `${t("git.localSaved")} ${result.remote_error}` : "");
       setRemoteNotice(result.remote_synced ? t("git.synced") : t("git.localSaved"));
+      if (result.auto_sync_error || result.auto_sync?.some((outcome) => outcome.error)) setError(result.auto_sync_error ?? result.auto_sync?.filter((outcome) => outcome.error).map((outcome) => `${t(`targets.${outcome.target}`)}: ${outcome.error}`).join("\n") ?? "");
       setMessage(""); await load(); onCommitted();
     } catch (value) { setError(String(value)); }
     finally { setBusy(false); }
@@ -983,11 +1026,27 @@ function GitPage({ onCommitted }: { onCommitted: () => void }) {
     try {
       const next = await api.loginRemote(remoteUrl.trim(), remoteBranch.trim(), loginUsername.trim(), loginToken);
       verified = true; setRemote(next); setLoginOpen(false); setLoginToken("");  setRemoteError(""); setRemoteNotice(t("git.loginDone"));
-      if (retryAfterLogin) { await api.syncRemote(); await load(); onCommitted(); setRemoteNotice(t("git.synced")); }
+      if (retryAfterLogin) { await receiveAndRefresh(); }
     } catch (value) {
       if (verified) { setRemoteError(String(value)); setRemote(await api.remoteSettings().catch(() => remote)); }
       else { setLoginError(String(value)); setRemote(await api.remoteSettings().catch(() => remote)); }
     } finally { setBusy(false); }
+  };
+  const previewRecovery = async (action: "discard" | "remote") => {
+    setBusy(true); setError(""); setRecoveryError(""); setRecoveryNotice("");
+    try { setRecovery(await api.versionRecoveryPlan(action)); setConfirmation(""); }
+    catch (value) { setRecoveryError(String(value)); }
+    finally { setBusy(false); }
+  };
+  const applyRecovery = async () => {
+    if (!recovery || confirmation !== (recovery.action === "discard" ? "DISCARD" : "REMOTE")) return;
+    setBusy(true); setRecoveryError("");
+    try {
+      const result = await api.versionRecoveryApply(recovery.id, confirmation);
+      setRecovery(null); setConfirmation(""); setMessage(""); await load(); onRecovered();
+      setRecoveryNotice(`${t("git.recoveryDone")} ${result.backup_path}${result.pending_changes ? ` · ${t("git.recoveryPending")}` : ""}`);
+    } catch (value) { setRecoveryError(String(value)); }
+    finally { setBusy(false); }
   };
   const forgetCredentials = async () => {
     setBusy(true); setRemoteError("");
@@ -1006,6 +1065,20 @@ function GitPage({ onCommitted }: { onCommitted: () => void }) {
         <div><p className="eyebrow">{t("git.branch")}</p><h2>{status.split("\n")[0]?.replace(/^## /, "") || t("git.title")}</h2><code>~/.agenthub/.git</code></div>
         <StatusBadge tone={dirty ? "warning" : "ok"}>{dirty ? t("overview.pending") : t("git.clean")}</StatusBadge>
       </section>
+      <section className="material commit-card">
+        <header className="version-changes-heading"><div><h2>{t("git.libraryChanges")}</h2><p>{t("git.recoveryScope")}</p></div><Button variant="secondary" disabled={busy} onClick={() => { setBusy(true); void load().catch((value) => setError(String(value))).finally(() => setBusy(false)); }}><RefreshCw size={16} />{t("git.refresh")}</Button></header>
+        <div className="remote-actions"><Button variant="danger" disabled={busy || !dirty || !history} onClick={() => void previewRecovery("discard")}>{t("git.discard")}</Button><Button variant="secondary" disabled={busy || !remote.url} onClick={() => void previewRecovery("remote")}>{t("git.useRemote")}</Button></div>
+        {!recovery && recoveryError && <p role="alert" className="inline-error">{recoveryError}</p>}
+        {recoveryNotice && <p role="status" className="git-recovery-notice">{recoveryNotice}</p>}
+        {changesError ? <p role="alert" className="inline-error">{changesError}</p> : <VersionChangeList changes={changes} />}
+      </section>
+      <Dialog open={Boolean(recovery)} title={t(recovery?.action === "discard" ? "git.discard" : "git.useRemote")} dismissible={!busy} onClose={() => { if (!busy) { setRecovery(null); setConfirmation(""); } }} actions={<><Button variant="secondary" disabled={busy} onClick={() => { setRecovery(null); setConfirmation(""); }}>{t("common.cancel")}</Button><Button variant="danger" disabled={busy || !recovery || confirmation !== (recovery.action === "discard" ? "DISCARD" : "REMOTE")} onClick={() => void applyRecovery()}>{busy ? <RefreshCw className="spin" size={16} /> : null}{t(recovery?.action === "discard" ? "git.discard" : "git.useRemote")}</Button></>}>
+        <p>{t(recovery?.action === "discard" ? "git.discardBody" : "git.useRemoteBody")}</p>
+        <code className="dialog-code">{recovery?.source_commit}</code>
+        <VersionChangeList changes={recovery?.changes ?? []} />
+        {recoveryError && <div className="inline-error" role="alert">{recoveryError}</div>}
+        <label className="field"><span>{t("git.confirmRecovery")} {recovery?.action === "discard" ? "DISCARD" : "REMOTE"}</span><input value={confirmation} disabled={busy} autoComplete="off" onChange={(event) => setConfirmation(event.target.value)} /></label>
+      </Dialog>
       <section className="material commit-card">
         <header><span className="commit-card__icon"><Cloud size={20} /></span><div><h2>{t("git.remoteTitle")}</h2><p>{t("git.remoteHint")}</p></div></header>
         <p>{t("git.authHint")}</p>
@@ -1185,10 +1258,10 @@ function SettingsPage({ data, onReset }: { data: Dashboard; onReset: (path: stri
         <StatusBadge tone="ok">{t("settings.localOnly")}</StatusBadge>
       </section>
       <section className="material policy-panel">
-        <header><div><p className="eyebrow">AUTHORITY POLICY</p><h2>{t("settings.coverageTitle")}</h2><p>{t("settings.coverageHint")}</p></div><StatusBadge tone={policy.strict_authoritative ? "warning" : "ok"}>{policy.strict_authoritative ? t("settings.strict") : t("settings.scoped")}</StatusBadge></header>
+        <header><div><p className="eyebrow">AUTHORITY POLICY</p><h2>{t("settings.coverageTitle")}</h2><p>{t("settings.coverageHint")}</p></div><StatusBadge tone={policy.sync_mode === "replace" ? "warning" : "ok"}>{policy.sync_mode === "replace" ? t("sync.replaceMode") : t("sync.preserveMode")}</StatusBadge></header>
         {policyError && <div className="inline-error" role="alert"><Activity size={17} /><span>{policyError}</span></div>}
-        <button type="button" className={`policy-toggle ${policy.strict_authoritative ? "is-enabled" : ""}`} disabled={savingPolicy} onClick={() => void updatePolicy({ ...policy, strict_authoritative: !policy.strict_authoritative })}>
-          <span><ShieldCheck size={20} /></span><span><strong>{t("settings.strictOverwrite")}</strong><small>{t("settings.strictOverwriteHint")}</small></span><i aria-hidden="true"><b /></i>
+        <button type="button" className={`policy-toggle ${policy.sync_mode === "replace" ? "is-enabled" : ""}`} disabled={savingPolicy} onClick={() => void updatePolicy({ ...policy, strict_authoritative: false, sync_mode: policy.sync_mode === "replace" ? "preserve" : "replace" })}>
+          <span><ShieldCheck size={20} /></span><span><strong>{t("sync.replaceMode")}</strong><small>{t("sync.replaceHint")}</small></span><i aria-hidden="true"><b /></i>
         </button>
         <button type="button" className={`policy-toggle ${policy.sync_after_reverse_import ? "is-enabled" : ""}`} disabled={savingPolicy} onClick={() => void updatePolicy({ ...policy, sync_after_reverse_import: !policy.sync_after_reverse_import })}>
           <span><RefreshCw size={20} /></span><span><strong>{t("settings.syncAfterImport")}</strong><small>{t("settings.syncAfterImportHint")}</small></span><i aria-hidden="true"><b /></i>
@@ -1216,7 +1289,7 @@ function ScanWarning({ item }: { item: ScanItem }) {
 function ImportSourcePicker({ items, available, selected, source, onSource, onSelected, busy }: { items: ScanItem[]; available: ScanItem[]; selected: Set<string>; source: string; onSource: (source: string) => void; onSelected: Dispatch<SetStateAction<Set<string>>>; busy: boolean }) {
   const sources = ["agents", "cursor", "codex", "claude", ...new Set(items.map((item) => item.source).filter((id) => !["agents", "cursor", "codex", "claude"].includes(id)))];
   const chosen = items.filter((item) => selected.has(item.id));
-  const unique = new Set(chosen.map((item) => `${item.kind}:${item.digest}`)).size;
+  const unique = new Set(chosen.map((item) => `${item.kind}:${item.comparison_digest ?? item.digest}`)).size;
   const current = available.filter((item) => source === "all" || item.source === source);
   return <section className="import-sources" aria-label={t("init.sources")}>
     <div className="scan-kind-tabs scan-source-tabs" role="group" aria-label={t("init.sources")}>
@@ -1363,8 +1436,8 @@ function Init({ onDone, recoveryPath }: { onDone: (count: number, restored?: boo
               {items.length > 0 && visibleScanItems.length === 0 && <EmptyState icon={kindMeta.find((kind) => kind.id === scanKind)?.icon ?? Boxes} title={t("init.emptyGroup")} body={t("init.emptyGroupHint")} compact />}
               {visibleScanItems.map((item) => {
                 const checked = selected.has(item.id);
-                const displayName = item.source_key?.replace(/^server:/, "") ?? item.path.split(/[\\/]/).pop();
-                const duplicate = items.some((candidate) => candidate.id !== item.id && candidate.kind === item.kind && candidate.digest === item.digest);
+                const displayName = item.source_key?.replace(/^(server|rule):/, "") ?? item.path.split(/[\\/]/).pop();
+                const duplicate = items.some((candidate) => candidate.id !== item.id && candidate.kind === item.kind && (candidate.comparison_digest ?? candidate.digest) === (item.comparison_digest ?? item.digest));
                 return (
                   <label className={`${checked ? "is-selected" : ""} ${!item.importable ? "is-disabled" : ""}`} key={item.id}>
                     <input type="checkbox" disabled={busy || !item.importable} checked={checked} onChange={() => setSelected((old) => { const next = new Set(old); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next; })} />
@@ -1382,4 +1455,8 @@ function Init({ onDone, recoveryPath }: { onDone: (count: number, restored?: boo
       <Dialog open={recover} onClose={() => !busy && setRecover(false)} title={t("init.recoverTitle")} actions={<><Button variant="secondary" disabled={busy} onClick={() => setRecover(false)}>{t("common.cancel")}</Button><Button variant="danger" disabled={busy} onClick={discard}>{t("init.recoverAction")}</Button></>}><p>{t("init.recoverBody")}</p></Dialog>
     </main>
   );
+}
+
+function SyncModePicker({ value, disabled, onChange }: { value: "preserve" | "replace"; disabled?: boolean; onChange: (value: "preserve" | "replace") => void }) {
+  return <fieldset className="sync-mode-picker"><legend>{t("sync.modeTitle")}</legend>{(["preserve", "replace"] as const).map((mode) => <label key={mode}><input type="radio" name="sync-mode" checked={value === mode} disabled={disabled} onChange={() => onChange(mode)} /><span><strong>{t(`sync.${mode}Mode`)}</strong><small>{t(`sync.${mode}Hint`)}</small></span></label>)}</fieldset>;
 }

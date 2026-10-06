@@ -4,9 +4,9 @@
     "linux": {
       "deb": {
         "files": {
-          "/usr/bin/agenthub": "../target/release/agenthub",
-          "/usr/share/agenthub/skills/agenthub-manager": "../skills/agenthub-manager"
-        }
+          "/usr/bin/agenthub": "../target/release/agenthub"
+        },
+        "preInstallScript": "../scripts/deb-preinst.sh"
       }
     }
   }

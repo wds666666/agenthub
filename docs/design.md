@@ -74,3 +74,7 @@ Git login reuses Dialog, field, Button, StatusBadge and inline-error owners. Rep
 First-run source choices reuse Button and material/inset surfaces in a wrapping two-column layout. Restore fields reuse the Versions credential owner. The panel remains the single scroll surface on narrow windows; no new token palette, font or ornamental animation is introduced.
 
 Skill change reminders use the existing `--red` token as a small status dot, paired with localized text/count and a review button. They do not add a new palette, animate continuously, or use destructive-button styling for the safe review action. Navigation dots remain visible in the compact sidebar; row dots have keyboard-accessible review controls.
+
+Synchronization mode uses a labeled radio group with localized consequences. Rules reuse the existing capability checklist. Upgrade review and modified/generated source states reuse semantic badges and inline warnings; no new visual tokens are introduced.
+
+Version recovery reuses the existing material card, Button, Dialog, field, status, and action-mark owners. `VersionChangeList` owns the capability grouping and expandable file paths for both the Versions page and recovery dialog. New styling uses existing line/text tokens; keyboard focus, typed confirmation, busy dismissal blocking, inline retry errors and narrow layout remain required.
