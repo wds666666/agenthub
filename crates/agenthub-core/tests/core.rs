@@ -272,7 +272,7 @@ fn skill_import_ignores_runtime_trees_and_keeps_portable_dependencies() {
         .as_deref()
         .unwrap()
         .contains(".venv"));
-    let digest = items[0].digest.clone();
+    let digest = items[0].comparison_digest.clone();
     let scan_id = items[0].id.clone();
     fs::write(source.join(".venv/local.dat"), "updated environment").unwrap();
     let rescanned = scanner::scan_global(&hub.paths, &[Target::Agents]).unwrap();
@@ -280,7 +280,10 @@ fn skill_import_ignores_runtime_trees_and_keeps_portable_dependencies() {
     items[0].selected = true;
     canonical::import_initial_atomic(&hub.paths, &items).unwrap();
     let destination = hub.paths.skills.join("pdf-read");
-    assert_eq!(canonical::tree_digest(&destination).unwrap(), digest);
+    assert_eq!(
+        agenthub_core::comparison::canonical_digest(CapabilityKind::Skill, &destination).unwrap(),
+        digest
+    );
     assert_eq!(canonical::validate(&hub.paths).unwrap().len(), 1);
     for name in [
         ".venv",
