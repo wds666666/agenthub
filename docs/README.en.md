@@ -11,7 +11,7 @@ Manage user-global capabilities for Cursor, Codex and Claude Code. Keep versions
 - Review synchronization changes, back up writes, verify results and recover previous tool state.
 - Save and synchronize library versions through Git. Backups, keys and device settings stay local.
 
-**Plugin support is incomplete.** Official Codex and Claude Code plugin caches are currently displayed only; complete import and synchronization are unavailable. See the [release notes](releases/v0.1.4-patch.1.md) for the current scope.
+**Plugin support is incomplete.** Official Codex and Claude Code plugin caches are currently displayed only; complete import and synchronization are unavailable. See the [release notes](releases/v0.1.5.md) for the current scope.
 
 ## Download and use
 

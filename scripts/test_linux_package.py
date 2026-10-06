@@ -2,6 +2,7 @@
 """Exercise real deb ownership in an isolated root without changing the host system."""
 import io
 import hashlib
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -15,7 +16,8 @@ def run(*args):
 
 def main():
     repo = Path(__file__).resolve().parent.parent
-    package = Path(sys.argv[1]) if len(sys.argv) > 1 else repo / 'target/release/bundle/deb/AgentHub_0.1.4_amd64.deb'
+    version = json.loads((repo / 'package.json').read_text())['version']
+    package = Path(sys.argv[1]) if len(sys.argv) > 1 else repo / f'target/release/bundle/deb/AgentHub_{version}_amd64.deb'
     package = package.resolve()
     control = tarfile.open(fileobj=io.BytesIO(run('dpkg-deb', '--ctrl-tarfile', str(package))))
     for name in control.getnames():
