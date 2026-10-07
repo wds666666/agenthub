@@ -104,3 +104,48 @@ for (const width of [1280, 390]) {
     await expect(page.getByRole("button", { name: "使用云端内容", exact: true })).toBeFocused();
   });
 }
+
+for (const width of [1280,390]) {
+  test(`selective save reviews Skill and keeps MCP excluded at ${width}`,async ({page},info)=>{
+    await page.setViewportSize({width,height:700});
+    await page.addInitScript(()=>{
+      let applied=0;let calls=0;
+      const changes=[{kind:"skill",id:"manager",action:"create",files:["skills/manager/SKILL.md"]},...Array.from({length:5},(_,i)=>({kind:"mcp",id:`server-${i}`,action:"create",files:[`mcp/server-${i}/server.json`]}))];
+      Object.defineProperty(window,"__TAURI_INTERNALS__",{value:{invoke:async(command:string,args:Record<string,unknown>)=>{
+        if(command==="dashboard")return{initialized:true,inventory:{skill:1,mcp:5},enabled_targets:[],auto_sync_targets:[],dirty:true,recent_transactions:[]};
+        if(command==="runtime_diagnostics")return{log_dir:"/test/logs",canonical_root:"/hub",git_available:true,platform:"linux"};
+        if(command==="check_skill_changes")return{changes:[],errors:[]};
+        if(command==="git_status")return"## main\n A mcp/server-0/server.json";
+        if(command==="git_diff")return"new Skill and five staged MCP";
+        if(command==="git_changes")return applied?changes.slice(1):changes;
+        if(command==="git_identity")return{name:"Test",email:"test@example.com"};
+        if(command==="git_log")return"abc\t2026-10-08\tInitial";
+        if(command==="remote_settings")return{url:"https://github.com/test/library.git",branch:"main",state:"read_verified"};
+        if(command==="version_save_plan"){
+          const options=args.options as {only:unknown[];push:boolean;host_sync:string};
+          if(JSON.stringify(options.only)!==JSON.stringify([{kind:"skill",id:"manager"}])||options.host_sync!=="none"||options.push)throw new Error("scope expanded");
+          return{id:"reviewed-save",head:"abc",options,changes:changes.slice(0,1),excluded_pending_changes:changes.slice(1),host_plans:[]};
+        }
+        if(command==="version_save_apply"){
+          if(args.planId!=="reviewed-save")throw new Error("wrong preview");
+          calls++;if(calls===1)throw new Error("stale version Plan; preview again");
+          applied++;return{local_saved:true,remote_synced:false,auto_sync:[]};
+        }
+        if(command==="debug_event")return;
+        throw new Error(`Unexpected IPC: ${command}`);
+      }}});
+    });
+    await page.goto("/");await page.getByRole("button",{name:"版本记录",exact:true}).click();
+    await expect(page.getByRole("button",{name:"预览保存范围",exact:true})).toBeDisabled();
+    await page.getByRole("checkbox",{name:"选择保存 manager",exact:true}).check();
+    await page.getByLabel("版本说明",{exact:true}).fill("Only manager");
+    await page.getByRole("button",{name:"预览保存范围",exact:true}).click();
+    const dialog=page.getByRole("dialog");await expect(dialog).toContainText("保留在本地的未保存改动");await expect(dialog).toContainText("server-4");await expect(dialog).toContainText("不修改任何工具文件");
+    await dialog.getByRole("button",{name:"确认保存",exact:true}).click();await expect(dialog.getByRole("alert")).toContainText("stale");
+    await dialog.getByRole("button",{name:"取消",exact:true}).click();await expect(page.getByLabel("版本说明",{exact:true})).toHaveValue("Only manager");
+    await page.getByRole("button",{name:"预览保存范围",exact:true}).click();await page.screenshot({path:info.outputPath("selective-save.png"),fullPage:true,animations:"disabled"});
+    await dialog.getByRole("button",{name:"确认保存",exact:true}).click();await expect(dialog).not.toBeVisible();
+    await expect(page.getByRole("checkbox",{name:"选择保存 manager",exact:true})).toHaveCount(0);await expect(page.getByRole("checkbox",{name:"选择保存 server-4",exact:true})).toBeVisible();
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth)).toBe(false);
+  });
+}

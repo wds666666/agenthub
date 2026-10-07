@@ -7,6 +7,7 @@ Manage user-global capabilities for Cursor, Codex and Claude Code. Keep versions
 ## Features
 
 - Select imports by tool and category; deduplicate identical content.
+- Import a complete local Skill folder from My library after reviewing its files.
 - Search, preview and manage Skills, MCP servers and rules, including bulk deletion.
 - Review synchronization changes, back up writes, verify results and recover previous tool state.
 - Save and synchronize library versions through Git. Backups, keys and device settings stay local.

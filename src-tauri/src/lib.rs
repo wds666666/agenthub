@@ -8,11 +8,12 @@ use agenthub_core::{
     },
     planner, scanner,
     skill_changes::{SkillChangeCache, SkillChangeReport},
-    transaction, versions, AgentHub,
+    transaction, version_save, versions, AgentHub,
 };
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::Manager;
+use tauri_plugin_dialog::DialogExt;
 
 #[derive(serde::Serialize)]
 struct RuntimeDiagnostics {
@@ -207,7 +208,7 @@ fn delete_capability(kind: CapabilityKind, id: String) -> Result<CapabilityDelet
         return Err("AgentHub must be initialized before deleting capabilities".into());
     }
     canonical::delete_capability(&h.paths, kind, &id).map_err(err)?;
-    let auto_sync = transaction::run_auto_sync(&h.paths, &h.store).map_err(err)?;
+    let auto_sync = Vec::new();
     trace(
         "inventory",
         "delete_complete",
@@ -229,10 +230,8 @@ fn delete_capabilities(
         return Err("AgentHub must be initialized before deleting capabilities".into());
     }
     let backup_path = canonical::delete_capabilities(&h.paths, &selected).map_err(err)?;
-    let (auto_sync, auto_sync_error) = match transaction::run_auto_sync(&h.paths, &h.store) {
-        Ok(outcomes) => (outcomes, None),
-        Err(error) => (Vec::new(), Some(err(error))),
-    };
+    let auto_sync = Vec::new();
+    let auto_sync_error = None;
     Ok(CapabilityBatchDeleteResult {
         deleted: selected,
         backup_path,
@@ -313,53 +312,38 @@ fn cleanup_host_resources(
 #[tauri::command(async)]
 fn import_scanned(selected_ids: Vec<String>) -> Result<ScanImportResult, String> {
     let h = hub()?;
-    if !h.store.initialized().map_err(err)? {
-        return Err("AgentHub must be initialized before reverse import".into());
-    }
-    let requested: std::collections::BTreeSet<_> = selected_ids.into_iter().collect();
-    let mut items = scanner::scan_global(&h.paths, &Target::ALL).map_err(err)?;
-    let matched = items
-        .iter()
-        .filter(|item| requested.contains(&item.id))
-        .count();
-    if matched != requested.len() {
-        return Err("scan result changed; scan again before importing".into());
-    }
-    let canonical_digests: std::collections::BTreeSet<_> = canonical::inventory(&h.paths)
-        .map_err(err)?
-        .into_iter()
-        .map(|item| (item.kind, item.comparison_digest))
-        .collect();
-    let mut seen_digests = canonical_digests.clone();
-    let mut skipped_duplicates = 0;
-    for item in &mut items {
-        let requested_item = requested.contains(&item.id);
-        let identity = (item.kind, item.comparison_digest.clone());
-        item.selected = requested_item && item.importable && seen_digests.insert(identity);
-        if requested_item && !item.selected {
-            skipped_duplicates += 1;
-        }
-    }
-    let selected_count = items.iter().filter(|item| item.selected).count();
-    let imported = canonical::import_scan_items_atomic(&h.paths, &items)
-        .map_err(|error| import_error("reverse_import", error))?;
-    skipped_duplicates += selected_count.saturating_sub(imported.len());
-    let auto_sync = if !imported.is_empty()
-        && h.store
-            .policy_settings()
-            .map_err(err)?
-            .sync_after_reverse_import
-    {
-        transaction::run_auto_sync(&h.paths, &h.store).map_err(err)?
-    } else {
-        Vec::new()
-    };
-    Ok(ScanImportResult {
-        imported,
-        skipped_duplicates,
-        auto_sync,
-    })
+    let plan = agenthub_core::imports::preview(&h.paths, &h.store, &selected_ids).map_err(err)?;
+    agenthub_core::imports::apply(&h.paths, &h.store, plan.id, true)
+        .map_err(|error| import_error("reverse_import", error))
 }
+
+#[tauri::command(async)]
+fn pick_local_skill(
+    app: tauri::AppHandle,
+) -> Result<Option<agenthub_core::imports::LocalSkillPreview>, String> {
+    // Do not hold the operation lock while the user is using the native picker.
+    let Some(source) = app.dialog().file().blocking_pick_folder() else {
+        return Ok(None);
+    };
+    let source = source.into_path().map_err(err)?;
+    let h = hub()?;
+    agenthub_core::imports::preview_local_skill(&h.paths, &h.store, &source)
+        .map(Some)
+        .map_err(|error| import_error("local_skill_preview", error))
+}
+
+#[tauri::command(async)]
+fn import_local_skill(plan_id: String) -> Result<ScanImportResult, String> {
+    let h = hub()?;
+    agenthub_core::imports::apply_local_skill(
+        &h.paths,
+        &h.store,
+        plan_id.parse().map_err(err)?,
+        true,
+    )
+    .map_err(|error| import_error("local_skill_import", error))
+}
+
 #[tauri::command(async)]
 fn finish_init(selected_ids: Vec<String>) -> Result<Vec<String>, String> {
     let _guard = InitGuard::acquire()?;
@@ -635,6 +619,11 @@ fn version_recovery_apply(
     versions::apply(&h.paths, plan_id.parse().map_err(err)?, &confirmation).map_err(err)
 }
 #[tauri::command(async)]
+fn receive_remote() -> Result<(), String> {
+    let h = hub()?;
+    git::receive_remote(&h.paths.root).map_err(err)
+}
+#[tauri::command(async)]
 fn git_status() -> Result<String, String> {
     let h = hub()?;
     git::status(&h.paths.root).map_err(err)
@@ -642,7 +631,7 @@ fn git_status() -> Result<String, String> {
 #[tauri::command(async)]
 fn git_diff() -> Result<String, String> {
     let h = hub()?;
-    git::diff(&h.paths.root).map_err(err)
+    git::diff_review(&h.paths.root, None, true).map_err(err)
 }
 #[tauri::command(async)]
 fn git_identity() -> Result<GitIdentity, String> {
@@ -653,6 +642,29 @@ fn git_identity() -> Result<GitIdentity, String> {
 fn git_log() -> Result<String, String> {
     let h = hub()?;
     git::log(&h.paths.root).map_err(err)
+}
+#[tauri::command(async)]
+fn version_save_plan(
+    message: String,
+    name: Option<String>,
+    email: Option<String>,
+    options: version_save::SaveOptions,
+) -> Result<version_save::SavePreview, String> {
+    let h = hub()?;
+    version_save::preview(
+        &h.paths,
+        &h.store,
+        &message,
+        name.as_deref(),
+        email.as_deref(),
+        options,
+    )
+    .map_err(err)
+}
+#[tauri::command(async)]
+fn version_save_apply(plan_id: String) -> Result<git::CommitResult, String> {
+    let h = hub()?;
+    version_save::apply(&h.paths, &h.store, plan_id.parse().map_err(err)?, true).map_err(err)
 }
 #[tauri::command(async)]
 fn git_commit(
@@ -746,6 +758,7 @@ fn sync_remote() -> Result<agenthub_core::models::RemoteSyncResult, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_log::Builder::new()
                 .clear_targets()
@@ -787,6 +800,8 @@ pub fn run() {
             host_inventory,
             cleanup_host_resources,
             import_scanned,
+            pick_local_skill,
+            import_local_skill,
             finish_init,
             restore_library,
             discard_incomplete_init,
@@ -808,8 +823,11 @@ pub fn run() {
             git_identity,
             git_log,
             git_commit,
+            version_save_plan,
+            version_save_apply,
             reset_agenthub,
             remote_settings,
+            receive_remote,
             connect_remote,
             login_remote,
             forget_remote_credentials,

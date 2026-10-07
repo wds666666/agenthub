@@ -39,7 +39,7 @@ import {
   Upload,
   UserRound,
 } from "lucide-react";
-import { api, type AutoSyncProfile, type Capability, type CapabilityDetail, type CapabilityChange, type VersionPreview, type CapabilityMutationResult, type Dashboard, type GitIdentity, type HostResource, type Kind, type Plan, type PolicySettings, type RuleDocument, type RuntimeDiagnostics, type RemoteSettings, type ScanItem, type SyncSelection, type Target, type Transaction } from "./lib/api";
+import { api, type AutoSyncProfile, type Capability, type CapabilityDetail, type CapabilityChange, type VersionPreview, SavePreview, type CapabilityMutationResult, type Dashboard, type GitIdentity, type HostResource, type Kind, type Plan, type PolicySettings, type RuleDocument, type RuntimeDiagnostics, type RemoteSettings, type ScanItem, type SyncSelection, type Target, type Transaction } from "./lib/api";
 import { t } from "./lib/i18n";
 import agentHubLogo from "./assets/agenthub-logo.png";
 import { Button, Dialog, PageHeader, SearchField, StatusBadge, Toast } from "./components/ui";
@@ -312,6 +312,7 @@ function Inventory({ onChanged, onNotify, skillChanges }: { onChanged: () => voi
   const [deleteCandidate, setDeleteCandidate] = useState<Capability | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [scanItems, setScanItems] = useState<ScanItem[] | null>(null);
+  const [localSkillOpen, setLocalSkillOpen] = useState(false);
   const [changeReview, setChangeReview] = useState(false);
   const [scanSelected, setScanSelected] = useState<Set<string>>(new Set());
   const [scanKind, setScanKind] = useState<Kind>("skill");
@@ -429,6 +430,7 @@ function Inventory({ onChanged, onNotify, skillChanges }: { onChanged: () => voi
           <div className="inventory-actions">
             <SearchField value={query} onChange={setQuery} />
             <Button variant="secondary" disabled={scanBusy} onClick={() => void scanForImport()}><RefreshCw className={scanBusy ? "spin" : ""} size={16} />{t("inventory.scanImport")}</Button>
+            <Button variant="secondary" onClick={() => setLocalSkillOpen(true)}><Upload size={16} />{t("inventory.importSkill")}</Button>
             <input ref={fileRef} className="sr-only" type="file" accept=".md,.mdc,text/markdown,text/plain" onChange={(event) => void importMarkdown(event.target.files?.[0])} />
             <Button variant="secondary" onClick={() => fileRef.current?.click()}><Upload size={16} />{t("inventory.importRule")}</Button>
             <Button onClick={() => setEditor({ document: blankRule(), create: true, imported: false })}><Plus size={16} />{t("inventory.newRule")}</Button>
@@ -488,6 +490,10 @@ function Inventory({ onChanged, onNotify, skillChanges }: { onChanged: () => voi
         })}
       </div>
       {editor && <RuleEditor key={`${editor.create ? "new" : "edit"}-${editor.document.id}`} initial={editor.document} create={editor.create} imported={editor.imported} onClose={() => setEditor(null)} onSaved={saved} />}
+      {localSkillOpen && <LocalSkillImportDialog onClose={() => setLocalSkillOpen(false)} onImported={(result) => {
+        setLocalSkillOpen(false); loadInventory(); onChanged();
+        onNotify(`${result.imported.length} ${t("inventory.scanImported")} · ${result.skipped_duplicates} ${t("inventory.scanSkipped")}`);
+      }} />}
       {detail && <CapabilityDetailDialog detail={detail} onClose={() => setDetail(null)} onDelete={() => setDeleteCandidate(detail.capability)} onEditRule={detail.capability.kind === "rule" ? () => { const id = detail.capability.id; setDetail(null); void editRule(id); } : undefined} />}
       <Dialog open={batchCandidate !== null} onClose={() => !deleting && setBatchCandidate(null)} title={t("inventory.batchTitle")} actions={<><Button variant="secondary" disabled={deleting} onClick={() => setBatchCandidate(null)}>{t("common.cancel")}</Button><Button variant="danger" disabled={deleting} onClick={() => void removeBatch()}>{deleting ? <RefreshCw className="spin" size={16} /> : <Trash2 size={16} />}{t("inventory.deleteSelected")} ({batchCandidate?.length ?? 0})</Button></>}>
         <p>{t("inventory.batchBody")}</p>
@@ -512,6 +518,45 @@ function Inventory({ onChanged, onNotify, skillChanges }: { onChanged: () => voi
       </Dialog>
     </>
   );
+}
+
+function LocalSkillImportDialog({ onClose, onImported }: { onClose: () => void; onImported: (result: Awaited<ReturnType<typeof api.importLocalSkill>>) => void }) {
+  const [preview, setPreview] = useState<Awaited<ReturnType<typeof api.pickLocalSkill>>>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const pending = useRef(false);
+  const choose = async () => {
+    if (pending.current) return;
+    pending.current = true; setBusy(true); setError(""); setPreview(null);
+    try { setPreview(await api.pickLocalSkill()); }
+    catch (value) { setError(String(value)); }
+    finally { pending.current = false; setBusy(false); }
+  };
+  const apply = async () => {
+    if (pending.current || !preview?.item.importable || preview.duplicate_of) return;
+    pending.current = true; setBusy(true); setError("");
+    try { onImported(await api.importLocalSkill(preview.id)); }
+    catch (value) { setError(String(value)); }
+    finally { pending.current = false; setBusy(false); }
+  };
+  return <Dialog open wide title={t("inventory.importSkill")} dismissible={!busy} onClose={() => !busy && onClose()} actions={<>
+    <Button variant="secondary" disabled={busy} onClick={onClose}>{t("common.cancel")}</Button>
+    <Button disabled={busy || !preview?.item.importable || Boolean(preview?.duplicate_of)} onClick={() => void apply()}>{busy ? <RefreshCw className="spin" size={16} /> : <Upload size={16} />}{t("inventory.confirmSkillImport")}</Button>
+  </>}>
+    <p>{t("inventory.localSkillHint")}</p>
+    <Button variant="secondary" disabled={busy} data-autofocus onClick={() => void choose()}><FolderTree size={16} />{t("inventory.chooseSkillFolder")}</Button>
+    {busy && <p role="status">{t("inventory.localSkillBusy")}</p>}
+    {error && <div className="inline-error" role="alert">{error}</div>}
+    {preview && <div className="local-skill-preview">
+      <p className="local-skill-source"><strong>{t("inventory.skillSource")}</strong><code>{preview.item.path}</code></p>
+      {preview.duplicate_of && <div className="warning-banner" role="status"><CheckCircle2 size={17} /><span>{t("inventory.alreadyCanonical")} · {preview.duplicate_of}</span></div>}
+      {preview.item.warning === "capability_modified" && <p>{t("inventory.skillNameConflict")}</p>}
+      <details open><summary>{t("inventory.fileInventory")} · {preview.files.length} {t("inventory.files")}</summary>
+        <ul className="local-skill-files">{preview.files.map((file) => <li key={file.path}><code>{file.path}</code><small>{file.size.toLocaleString()} B</small></li>)}</ul>
+      </details>
+      {preview.excluded.length > 0 && <details><summary>{t("inventory.skillExclusions")} · {preview.excluded.length}</summary><ul className="local-skill-files">{preview.excluded.map((path) => <li key={path}><code>{path}</code></li>)}</ul></details>}
+    </div>}
+  </Dialog>;
 }
 
 function HostResources({ onNotify }: { onNotify: (message: string) => void }) {
@@ -932,17 +977,21 @@ function Sync({ onApplied, onNotify }: { onApplied: () => void; onNotify: (messa
   );
 }
 
-function VersionChangeList({ changes }: { changes: CapabilityChange[] }) {
+function VersionChangeList({ changes, selected, onSelect, disabled = false }: { changes: CapabilityChange[]; selected?: string[]; onSelect?: (key: string) => void; disabled?: boolean }) {
   if (!changes.length) return <p className="commit-clean">{t("git.noDiff")}</p>;
   return <div className="version-capability-changes">{([...kindMeta.map((item) => item.id), "library"] as const).map((kind) => {
     const items = changes.filter((item) => (item.kind ?? "library") === kind);
     if (!items.length) return null;
-    return <section key={kind}><h3>{kind === "library" ? t("git.libraryConfig") : t(`kinds.${kind}`)} <span className="count-badge">{items.length}</span></h3>{items.map((item) => <details key={item.id}><summary><ChevronRight size={15} /><span className={`action-mark action-mark--${item.action}`}>{t(`sync.${item.action}`)}</span><strong>{item.id}</strong><small>{item.files.length} {t("sync.files")}</small></summary><ul>{item.files.map((file) => <li key={file}><code>{file}</code></li>)}</ul></details>)}</section>;
+    return <section key={kind}><h3>{kind === "library" ? t("git.libraryConfig") : t(`kinds.${kind}`)} <span className="count-badge">{items.length}</span></h3>{items.map((item) => <div key={item.id} className="version-change-entry">{onSelect && item.kind && <label className="version-selection"><input type="checkbox" disabled={disabled} checked={selected?.includes(`${item.kind}:${item.id}`) ?? false} onChange={() => onSelect(`${item.kind}:${item.id}`)} /><span>{t("git.selectCapability")} {item.id}</span></label>}<details><summary><ChevronRight size={15} /><span className={`action-mark action-mark--${item.action}`}>{t(`sync.${item.action}`)}</span><strong>{item.id}</strong><small>{item.files.length} {t("sync.files")}</small></summary><ul>{item.files.map((file) => <li key={file}><code>{file}</code></li>)}</ul></details></div>)}</section>;
   })}</div>;
 }
 
 function GitPage({ onCommitted, onRecovered }: { onCommitted: () => void; onRecovered: () => void }) {
   const [changes, setChanges] = useState<CapabilityChange[]>([]);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [pushAfterSave, setPushAfterSave] = useState(false);
+  const [projectAfterSave, setProjectAfterSave] = useState(false);
+  const [savePreview, setSavePreview] = useState<SavePreview | null>(null);
   const [changesError, setChangesError] = useState("");
   const [recovery, setRecovery] = useState<VersionPreview | null>(null);
   const [confirmation, setConfirmation] = useState("");
@@ -968,11 +1017,12 @@ function GitPage({ onCommitted, onRecovered }: { onCommitted: () => void; onReco
     setRetryAfterLogin(retry); setLoginError(""); setLoginToken("");  setLoginOpen(true);
   };
   const closeLogin = () => { if (!busy) { setLoginOpen(false); setLoginToken(""); setLoginError("");  } };
-  const remoteAction = async (action: "connect" | "disconnect" | "sync") => {
+  const remoteAction = async (action: "connect" | "disconnect" | "sync" | "receive") => {
     setBusy(true); setRemoteError(""); setRemoteNotice("");
     try {
       if (action === "connect") { setRemote(await api.connectRemote(remoteUrl.trim(), remoteBranch.trim())); setRemoteNotice(t("git.connected")); }
       else if (action === "disconnect") { await api.disconnectRemote(); setRemote({ branch: remoteBranch }); }
+      else if (action === "receive") { await api.receiveRemote(); await load(); onCommitted(); setRemoteNotice(t("git.received")); }
       else { await receiveAndRefresh(); }
     } catch (value) {
       setRemoteError(String(value));
@@ -989,11 +1039,11 @@ function GitPage({ onCommitted, onRecovered }: { onCommitted: () => void; onReco
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const load = useCallback(async () => {
-    const [nextStatus, nextDiff, nextHistory, nextIdentity, nextRemote] = await Promise.all([api.gitStatus(), api.gitDiff(), api.gitLog(), api.gitIdentity(), api.remoteSettings()]);
+    const [nextStatus, nextDiff, nextHistory, nextIdentity, nextRemote] = await Promise.all([api.gitStatus(), api.gitDiff(), api.gitLog(), api.gitIdentity(), api.remoteSettings().catch((value) => { setRemoteError(String(value)); return { branch: "main" } as RemoteSettings; })]);
     setRemote(nextRemote); setRemoteUrl(nextRemote.url ?? ""); setRemoteBranch(nextRemote.branch);
     setStatus(nextStatus); setDiff(nextDiff); setHistory(nextHistory); setIdentity(nextIdentity);
     setName(nextIdentity.name ?? ""); setEmail(nextIdentity.email ?? "");
-    try { setChanges(await api.gitChanges()); setChangesError(""); }
+    try { const pending = await api.gitChanges(); setChanges(pending); setSelected((previous) => previous.filter((key) => pending.some((item) => `${item.kind}:${item.id}` === key))); setChangesError(""); }
     catch (value) { setChanges([]); setChangesError(String(value)); }
   }, []);
   useEffect(() => { void load().catch((value) => setError(String(value))); }, [load]);
@@ -1009,11 +1059,21 @@ function GitPage({ onCommitted, onRecovered }: { onCommitted: () => void; onReco
     if ((!identity.name && !name.trim()) || (!identity.email && !/^\S+@\S+\.\S+$/.test(email))) { setError(t("git.identityHint")); return; }
     setBusy(true);
     try {
-      const result = await api.gitCommit(message.trim(), identity.name ? undefined : name.trim(), identity.email ? undefined : email.trim());
+      if (!selected.length) { setError(t("git.chooseCapabilities")); return; }
+      const only = selected.map((key) => { const [kind, id] = key.split(":"); return { kind: kind as Kind, id }; });
+      setSavePreview(await api.versionSavePlan(message.trim(), { only, push: pushAfterSave, host_sync: projectAfterSave ? "enabled" : "none" }, identity.name ? undefined : name.trim(), identity.email ? undefined : email.trim()));
+    } catch (value) { setError(String(value)); }
+    finally { setBusy(false); }
+  };
+  const applySave = async () => {
+    if (!savePreview || busy) return;
+    setBusy(true); setError("");
+    try {
+      const result = await api.versionSaveApply(savePreview.id);
       setRemoteError(result.remote_error ? `${t("git.localSaved")} ${result.remote_error}` : "");
       setRemoteNotice(result.remote_synced ? t("git.synced") : t("git.localSaved"));
-      if (result.auto_sync_error || result.auto_sync?.some((outcome) => outcome.error)) setError(result.auto_sync_error ?? result.auto_sync?.filter((outcome) => outcome.error).map((outcome) => `${t(`targets.${outcome.target}`)}: ${outcome.error}`).join("\n") ?? "");
-      setMessage(""); await load(); onCommitted();
+      setError(result.auto_sync_error ?? result.auto_sync?.filter((outcome) => outcome.error).map((outcome) => `${t(`targets.${outcome.target}`)}: ${outcome.error}`).join("\n") ?? "");
+      setSavePreview(null); setMessage(""); setSelected([]); await load(); onCommitted();
     } catch (value) { setError(String(value)); }
     finally { setBusy(false); }
   };
@@ -1070,7 +1130,7 @@ function GitPage({ onCommitted, onRecovered }: { onCommitted: () => void; onReco
         <div className="remote-actions"><Button variant="danger" disabled={busy || !dirty || !history} onClick={() => void previewRecovery("discard")}>{t("git.discard")}</Button><Button variant="secondary" disabled={busy || !remote.url} onClick={() => void previewRecovery("remote")}>{t("git.useRemote")}</Button></div>
         {!recovery && recoveryError && <p role="alert" className="inline-error">{recoveryError}</p>}
         {recoveryNotice && <p role="status" className="git-recovery-notice">{recoveryNotice}</p>}
-        {changesError ? <p role="alert" className="inline-error">{changesError}</p> : <VersionChangeList changes={changes} />}
+        {changesError ? <p role="alert" className="inline-error">{changesError}</p> : <><div className="remote-actions"><Button variant="secondary" disabled={busy || !changes.length} onClick={() => setSelected(changes.filter((item) => item.kind).map((item) => `${item.kind}:${item.id}`))}>{t("common.selectAll")}</Button><Button variant="secondary" disabled={busy || !selected.length} onClick={() => setSelected([])}>{t("common.clearSelection")}</Button><span>{t("git.selectedCount")} {selected.length}</span></div><VersionChangeList changes={changes} selected={selected} disabled={busy} onSelect={(key) => setSelected((previous) => previous.includes(key) ? previous.filter((item) => item !== key) : [...previous, key])} /></>}
       </section>
       <Dialog wide open={Boolean(recovery)} title={t(recovery?.action === "discard" ? "git.discard" : "git.useRemote")} dismissible={!busy} onClose={() => { if (!busy) { setRecovery(null); setConfirmation(""); } }} actions={<><Button variant="secondary" disabled={busy} onClick={() => { setRecovery(null); setConfirmation(""); }}>{t("common.cancel")}</Button><Button variant="danger" disabled={busy || !recovery || confirmation !== (recovery.action === "discard" ? "DISCARD" : "REMOTE")} onClick={() => void applyRecovery()}>{busy ? <RefreshCw className="spin" size={16} /> : null}{t(recovery?.action === "discard" ? "git.discard" : "git.useRemote")}</Button></>}>
         <p>{t(recovery?.action === "discard" ? "git.discardBody" : "git.useRemoteBody")}</p>
@@ -1079,12 +1139,25 @@ function GitPage({ onCommitted, onRecovered }: { onCommitted: () => void; onReco
         {recoveryError && <div className="inline-error" role="alert">{recoveryError}</div>}
         <label className="field"><span>{t("git.confirmRecovery")} {recovery?.action === "discard" ? "DISCARD" : "REMOTE"}</span><input value={confirmation} disabled={busy} autoComplete="off" onChange={(event) => setConfirmation(event.target.value)} /></label>
       </Dialog>
+      <Dialog wide open={Boolean(savePreview)} title={t("git.reviewSave")} dismissible={!busy} onClose={() => { if (!busy) { setSavePreview(null); setError(""); } }} actions={<><Button variant="secondary" disabled={busy} onClick={() => { setSavePreview(null); setError(""); }}>{t("common.cancel")}</Button><Button disabled={busy} onClick={() => void applySave()}>{busy ? <RefreshCw className="spin" size={16} /> : null}{t("git.applySave")}</Button></>}>
+        <p>{t("git.saveScope")}</p>
+        <VersionChangeList changes={savePreview?.changes ?? []} />
+        {savePreview?.file_review?.some((file) => file.credential_warning) && <p className="warning-banner" role="status">{t("git.credentialReview")}</p>}
+        {savePreview?.file_review?.some((file) => file.binary) && <details><summary>{t("git.binaryFiles")}</summary><ul>{savePreview.file_review.filter((file) => file.binary).map((file) => <li key={file.path}><code>{file.path}</code> · {file.size} B · {file.digest.slice(0, 12)}</li>)}</ul></details>}
+        <h3>{t("git.excludedChanges")}</h3><VersionChangeList changes={savePreview?.excluded_pending_changes ?? []} />
+        <p>{t("git.localHead")} <code>{savePreview?.head ?? "—"}</code></p>
+        <p>{savePreview?.options.push ? `${t("git.pushSelected")} · ${savePreview.remote_url} · ${savePreview.remote_branch}` : t("git.localOnly")}</p>
+        {savePreview?.remote_head && <p>{t("git.remoteHead")} <code>{savePreview.remote_head}</code></p>}
+        <h3>{t("git.toolProjection")}</h3>
+        {savePreview?.host_plans.length ? savePreview.host_plans.map((plan) => <section key={plan.target}><h4>{t(`targets.${plan.target}`)}</h4><ul>{plan.resource_changes?.map((item) => <li key={`${item.kind}:${item.id}`}>{t(`kinds.${item.kind}`)} · {item.id} · {t(`sync.${item.action}`)}</li>)}</ul><details><summary>{t("sync.fileDetails")}</summary><ul>{plan.steps.map((step) => <li key={step.path}><span>{t(`sync.${step.action}`)}</span> <code>{step.path}</code></li>)}</ul></details></section>) : <p>{t("git.noToolWrites")}</p>}
+        {error && <p className="inline-error" role="alert">{error}</p>}
+      </Dialog>
       <section className="material commit-card">
         <header><span className="commit-card__icon"><Cloud size={20} /></span><div><h2>{t("git.remoteTitle")}</h2><p>{t("git.remoteHint")}</p></div></header>
         <p>{t("git.authHint")}</p>
         <form noValidate onSubmit={(event) => { event.preventDefault(); void remoteAction("connect"); }}>
           <div className="form-grid"><label className="field"><span>{t("git.remoteUrl")}</span><input value={remoteUrl} disabled={busy || Boolean(remote.url)} placeholder="https://github.com/user/agenthub.git" onChange={(event) => setRemoteUrl(event.target.value)} /></label><label className="field"><span>{t("git.remoteBranch")}</span><input value={remoteBranch} disabled={busy || Boolean(remote.url)} onChange={(event) => setRemoteBranch(event.target.value)} /></label></div>
-          <div className="remote-actions">{remote.url ? <><StatusBadge tone={remoteStateTone}>{t(remoteStateLabel)}</StatusBadge><Button type="button" disabled={busy || dirty || !history} onClick={() => void remoteAction("sync")}><RefreshCw size={16} />{t("git.syncNow")}</Button><Button type="button" variant="secondary" disabled={busy} onClick={() => void remoteAction("disconnect")}>{t("git.disconnect")}</Button></> : <Button type="submit" disabled={busy || !remoteUrl.trim() || !remoteBranch.trim()}>{busy ? <RefreshCw className="spin" size={16} /> : <Cloud size={16} />}{t("git.connect")}</Button>}</div>
+          <div className="remote-actions">{remote.url ? <><StatusBadge tone={remoteStateTone}>{t(remoteStateLabel)}</StatusBadge><Button type="button" disabled={busy || !history} onClick={() => void remoteAction("sync")}><RefreshCw size={16} />{t("git.syncNow")}</Button><Button type="button" variant="secondary" disabled={busy || dirty || !history} onClick={() => void remoteAction("receive")}>{t("git.receiveOnly")}</Button><Button type="button" variant="secondary" disabled={busy} onClick={() => void remoteAction("disconnect")}>{t("git.disconnect")}</Button></> : <Button type="submit" disabled={busy || !remoteUrl.trim() || !remoteBranch.trim()}>{busy ? <RefreshCw className="spin" size={16} /> : <Cloud size={16} />}{t("git.connect")}</Button>}</div>
         </form>
         {remoteUrl.trim().startsWith("https://") && <div className="remote-auth-actions"><Button type="button" variant="secondary" disabled={busy || !remoteBranch.trim()} onClick={() => openLogin(remote.state === "auth_failed" && !dirty && Boolean(history))}><KeyRound size={16} />{t(remote.state === "auth_failed" && !dirty && Boolean(history) ? "git.loginRetry" : "git.login")}</Button>{remote.credential_saved && <><span className="remote-credential-label"><ShieldCheck size={15} />{t("git.savedCredential")}</span><Button type="button" variant="secondary" disabled={busy} onClick={() => void forgetCredentials()}>{t("git.forgetCredential")}</Button></>}</div>}
         <p>{t("git.remoteScope")}</p>
@@ -1104,8 +1177,9 @@ function GitPage({ onCommitted, onRecovered }: { onCommitted: () => void; onReco
         {error && <div className="inline-error" role="alert"><Activity size={17} /><span>{error}</span></div>}
         <div className="commit-form-row">
           <label className="field"><span>{t("git.message")}</span><input value={message} placeholder={t("git.messagePlaceholder")} onChange={(event) => { setMessage(event.target.value); setError(""); }} /></label>
-          <Button type="submit" disabled={busy || !dirty}>{busy ? <RefreshCw className="spin" size={16} /> : <GitBranch size={16} />}{busy ? t("git.committing") : t("git.commit")}</Button>
+          <Button type="submit" disabled={busy || !dirty || !selected.length}>{busy ? <RefreshCw className="spin" size={16} /> : <GitBranch size={16} />}{busy ? t("git.committing") : t("git.reviewSave")}</Button>
         </div>
+        <div className="remote-actions"><label className="version-selection"><input type="checkbox" disabled={busy || !remote.url} checked={pushAfterSave} onChange={(event) => setPushAfterSave(event.target.checked)} /><span>{t("git.pushSelected")}</span></label><label className="version-selection"><input type="checkbox" disabled={busy} checked={projectAfterSave} onChange={(event) => setProjectAfterSave(event.target.checked)} /><span>{t("git.projectSelected")}</span></label></div>
         {(!identity.name || !identity.email) && (
           <fieldset className="identity-fields"><legend><UserRound size={15} />{t("git.identity")}</legend><p>{t("git.identityHint")}</p><div className="form-grid"><label className="field"><span>{t("git.name")}</span><input value={name} autoComplete="name" onChange={(event) => setName(event.target.value)} /></label><label className="field"><span>{t("git.email")}</span><input type="email" value={email} autoComplete="email" onChange={(event) => setEmail(event.target.value)} /></label></div></fieldset>
         )}
@@ -1263,9 +1337,7 @@ function SettingsPage({ data, onReset }: { data: Dashboard; onReset: (path: stri
         <button type="button" className={`policy-toggle ${policy.sync_mode === "replace" ? "is-enabled" : ""}`} disabled={savingPolicy} onClick={() => void updatePolicy({ ...policy, strict_authoritative: false, sync_mode: policy.sync_mode === "replace" ? "preserve" : "replace" })}>
           <span><ShieldCheck size={20} /></span><span><strong>{t("sync.replaceMode")}</strong><small>{t("sync.replaceHint")}</small></span><i aria-hidden="true"><b /></i>
         </button>
-        <button type="button" className={`policy-toggle ${policy.sync_after_reverse_import ? "is-enabled" : ""}`} disabled={savingPolicy} onClick={() => void updatePolicy({ ...policy, sync_after_reverse_import: !policy.sync_after_reverse_import })}>
-          <span><RefreshCw size={20} /></span><span><strong>{t("settings.syncAfterImport")}</strong><small>{t("settings.syncAfterImportHint")}</small></span><i aria-hidden="true"><b /></i>
-        </button>
+
         <div className="policy-guards"><span><CheckCircle2 size={15} />{t("settings.planGuard")}</span><span><CheckCircle2 size={15} />{t("settings.backupGuard")}</span><span><CheckCircle2 size={15} />{t("settings.vendorGuard")}</span></div>
       </section>
     </>

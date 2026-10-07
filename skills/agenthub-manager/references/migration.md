@@ -28,4 +28,4 @@ Report what migrated, skipped resources, root/repository/branch, local and remot
 
 ## HTTPS authentication
 
-In desktop Versions, use repository sign-in for GitHub or self-hosted Git/Gitea. The username and access token are encrypted locally and shared with CLI. Never ask for a token in chat, put it in command arguments or embed it in a repository URL. Login verifies reading; Sync remote uploads. Failed uploads preserve local versions. Re-enter expired credentials in the desktop, or delete the saved entry to use system Git/SSH. Credentials do not synchronize across devices.
+In desktop Versions, use repository sign-in for GitHub or self-hosted Git/Gitea. The username and access token are encrypted locally and shared with CLI. Never ask for a token in chat, put it in command arguments or embed it in a repository URL. Login verifies reading; explicit remote push publishes saved history. Failed uploads preserve local versions. Re-enter expired credentials in the desktop, or delete the saved entry to use system Git/SSH. Credentials do not synchronize across devices.

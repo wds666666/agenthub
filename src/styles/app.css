@@ -273,6 +273,12 @@ code, pre { font-family: var(--mono); font-variant-ligatures: none; }
 .search input::placeholder { color: var(--ink-tertiary); }
 .search button { display: grid; place-items: center; width: 26px; height: 26px; padding: 0; color: var(--ink-tertiary); background: var(--material-inset); border: 0; border-radius: 50%; cursor: pointer; }
 .inventory-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.local-skill-preview { display: grid; gap: 16px; margin-top: 20px; min-width: 0; }
+.local-skill-source { display: grid; gap: 8px; }
+.local-skill-source code, .local-skill-files code { overflow-wrap: anywhere; }
+.local-skill-files { list-style: none; padding: 0; }
+.local-skill-files li { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; padding: 8px 0; }
+.local-skill-files small { flex-shrink: 0; color: var(--ink-secondary); }
 
 .inventory-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .inventory-card { min-width: 0; overflow: hidden; }
@@ -865,3 +871,6 @@ code, pre { font-family: var(--mono); font-variant-ligatures: none; }
 .commit-card > .version-changes-heading { grid-template-columns: minmax(0, 1fr) auto; }
 .version-capability-changes details[open] > summary > svg { transform: rotate(90deg); }
 .version-capability-changes summary > svg { flex-shrink: 0; }
+
+.version-selection { display: flex; align-items: center; gap: 8px; padding: 8px 0; font-size: 13px; }
+.version-selection input { flex-shrink: 0; }

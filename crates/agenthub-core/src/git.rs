@@ -37,6 +37,9 @@ pub fn available() -> bool {
 }
 
 pub(crate) fn run(root: &Path, args: &[&str]) -> Result<String> {
+    run_authenticated(root, root, args)
+}
+pub(crate) fn run_authenticated(root: &Path, auth_root: &Path, args: &[&str]) -> Result<String> {
     let network_url = if matches!(args.first(), Some(&"ls-remote" | &"fetch" | &"push")) {
         args.iter().find(|arg| {
             arg.starts_with("https://") || arg.starts_with("ssh://") || arg.starts_with("git@")
@@ -46,7 +49,7 @@ pub(crate) fn run(root: &Path, args: &[&str]) -> Result<String> {
     };
     let credential = network_url
         .filter(|url| url.starts_with("https://"))
-        .map(|url| crate::git_auth::for_url(root, url))
+        .map(|url| crate::git_auth::for_url(auth_root, url))
         .transpose()?
         .flatten();
     let mut process = command("git");
@@ -90,7 +93,7 @@ pub(crate) fn run(root: &Path, args: &[&str]) -> Result<String> {
                 "-c",
                 &format!("credential.username={}", saved.username),
             ])
-            .env("AGENTHUB_GIT_ROOT", root);
+            .env("AGENTHUB_GIT_ROOT", auth_root);
     }
     let mut child = process
         .arg("-C")
@@ -122,7 +125,7 @@ pub(crate) fn run(root: &Path, args: &[&str]) -> Result<String> {
             let _ = child.kill();
             let _ = child.wait();
             if let Some(url) = network_url {
-                mark_network_failure(root, url, "network_error");
+                mark_network_failure(auth_root, url, "network_error");
             }
             anyhow::bail!(
                 "Git operation timed out; check network and saved credentials, then retry"
@@ -158,7 +161,7 @@ pub(crate) fn run(root: &Path, args: &[&str]) -> Result<String> {
             } else {
                 "network_error"
             };
-            mark_network_failure(root, url, state);
+            mark_network_failure(auth_root, url, state);
         }
         anyhow::bail!("git failed: {error}");
     }
@@ -230,6 +233,141 @@ pub fn diff(root: &Path) -> Result<String> {
     };
     let untracked = run(root, &["ls-files", "--others", "--exclude-standard"])?;
     Ok(format!("{tracked}\n{untracked}").trim().to_string())
+}
+pub(crate) fn pending_paths(root: &Path) -> Result<Vec<String>> {
+    let mut names = if snapshot(root)?.head.is_some() {
+        run(root, &["diff", "HEAD", "--name-only", "--no-renames", "-z"])?
+    } else {
+        run(root, &["ls-files", "--cached", "-z"])?
+    };
+    names.push('\0');
+    names.push_str(&run(
+        root,
+        &["ls-files", "--others", "--exclude-standard", "-z"],
+    )?);
+    Ok(names
+        .split('\0')
+        .filter(|p| !p.is_empty())
+        .map(str::to_owned)
+        .collect())
+}
+/// Read-only review, including ordinary new files; payloads are never executed.
+pub fn diff_review(
+    root: &Path,
+    capability: Option<&str>,
+    include_untracked: bool,
+) -> Result<String> {
+    let path = capability
+        .map(crate::version_save::parse_key)
+        .transpose()?
+        .map(|key| {
+            format!(
+                "{}/{}",
+                match key.kind {
+                    crate::models::CapabilityKind::Skill => "skills",
+                    crate::models::CapabilityKind::Mcp => "mcp",
+                    crate::models::CapabilityKind::Rule => "rules",
+                    crate::models::CapabilityKind::Plugin => "plugins",
+                },
+                key.id
+            )
+        });
+    let mut args = vec!["diff"];
+    if snapshot(root)?.head.is_some() {
+        args.push("HEAD");
+    } else {
+        args.push("--cached");
+    }
+    args.extend(["--no-ext-diff", "--no-textconv", "--"]);
+    if let Some(path) = &path {
+        args.push(path);
+    }
+    let mut output = String::new();
+    let tracked = if snapshot(root)?.head.is_some() {
+        run(root, &["diff", "HEAD", "--name-only", "--no-renames", "-z"])?
+    } else {
+        run(root, &["diff", "--cached", "--name-only", "-z"])?
+    };
+    for name in tracked.split('\0').filter(|name| !name.is_empty()) {
+        if path
+            .as_ref()
+            .is_some_and(|p| name != p && !name.starts_with(&format!("{p}/")))
+        {
+            continue;
+        }
+        if !(name == "agenthub.toml"
+            || ["skills/", "mcp/", "rules/", "plugins/"]
+                .iter()
+                .any(|p| name.starts_with(p)))
+        {
+            continue;
+        }
+        let sensitive = |text: &str| {
+            serde_json::from_str::<serde_json::Value>(text)
+                .map_or(name.ends_with(".json"), |v| has_plaintext_credentials(&v))
+        };
+        let current = std::fs::read_to_string(root.join(name)).ok();
+        let old = run(root, &["show", &format!("HEAD:{name}")]).ok();
+        if current.as_deref().is_some_and(sensitive) || old.as_deref().is_some_and(sensitive) {
+            output.push_str(&format!("\n{name}: credential-bearing JSON diff omitted; inspect privately and replace credentials before sharing\n"));
+        } else {
+            let mut specific = args.clone();
+            specific.truncate(specific.iter().position(|arg| *arg == "--").unwrap() + 1);
+            specific.push(name);
+            output.push_str(&run(root, &specific)?);
+            output.push('\n');
+        }
+    }
+    if include_untracked {
+        for name in run(root, &["ls-files", "--others", "--exclude-standard", "-z"])?
+            .split('\0')
+            .filter(|name| !name.is_empty())
+        {
+            if path
+                .as_ref()
+                .is_some_and(|p| name != p && !name.starts_with(&format!("{p}/")))
+            {
+                continue;
+            }
+            if !(name == "agenthub.toml"
+                || ["skills/", "mcp/", "rules/", "plugins/"]
+                    .iter()
+                    .any(|p| name.starts_with(p)))
+            {
+                continue;
+            }
+            let file = root.join(name);
+            anyhow::ensure!(
+                std::fs::symlink_metadata(&file)?.file_type().is_file(),
+                "cannot review nonordinary new file"
+            );
+            let bytes = std::fs::read(file)?;
+            output.push_str(&format!(
+                "\nnew file: {name} ({} bytes; sha256 {})\n",
+                bytes.len(),
+                crate::canonical::sha256(&bytes)
+            ));
+            if let Some(text) = std::str::from_utf8(&bytes)
+                .ok()
+                .filter(|_| !bytes.contains(&0))
+            {
+                if serde_json::from_str::<serde_json::Value>(text)
+                    .map_or(name.ends_with(".json"), |v| has_plaintext_credentials(&v))
+                {
+                    output.push_str("[credential-bearing JSON omitted; replace plaintext credentials before sharing]\n");
+                } else {
+                    for line in text.lines() {
+                        output.push('+');
+                        output.push_str(&crate::secrets::redact(line));
+                        output.push('\n');
+                    }
+                }
+            } else {
+                output.push_str("[binary content]\n");
+            }
+        }
+    }
+    Ok(crate::secrets::redact(&output))
 }
 pub fn log(root: &Path) -> Result<String> {
     ensure_repo(root)?;
@@ -318,6 +456,7 @@ pub struct RemoteSettings {
     pub branch: String,
     pub state: String,
     pub credential_saved: bool,
+    pub write_permission: String,
 }
 #[derive(Debug, serde::Serialize)]
 pub struct CommitResult {
@@ -326,8 +465,21 @@ pub struct CommitResult {
     pub local_saved: bool,
     pub remote_synced: bool,
     pub remote_error: Option<String>,
+    pub commit_hash: String,
+    pub remote_branch: Option<String>,
+    pub remote_head: Option<String>,
+    pub remote_merged: bool,
+    pub committed_capabilities: Vec<crate::versions::CapabilityChange>,
+    pub excluded_pending_changes: Vec<crate::versions::CapabilityChange>,
 }
 
+pub(crate) fn remote_connection(root: &Path) -> Result<(Option<String>, String)> {
+    ensure_repo(root)?;
+    Ok((
+        run(root, &["config", "--get", "remote.agenthub.url"]).ok(),
+        run(root, &["config", "--get", "agenthub.remoteBranch"]).unwrap_or_else(|_| "main".into()),
+    ))
+}
 pub fn remote_settings(root: &Path) -> Result<RemoteSettings> {
     ensure_repo(root)?;
     let url = run(root, &["config", "--get", "remote.agenthub.url"]).ok();
@@ -349,6 +501,7 @@ pub fn remote_settings(root: &Path) -> Result<RemoteSettings> {
         branch,
         state,
         credential_saved,
+        write_permission: "unknown".into(),
     })
 }
 
@@ -578,7 +731,7 @@ fn placeholder(value: &str) -> bool {
         || value.starts_with("env:")
         || value.starts_with("secret://")
 }
-fn has_plaintext_credentials(value: &serde_json::Value) -> bool {
+pub(crate) fn has_plaintext_credentials(value: &serde_json::Value) -> bool {
     match value {
         serde_json::Value::Object(object) => object.iter().any(|(key, value)| {
             if credential_name(key) && value.as_str().is_some_and(|text| !placeholder(text)) {
@@ -628,7 +781,10 @@ fn has_plaintext_credentials(value: &serde_json::Value) -> bool {
 }
 /// Check history as well as HEAD: deleting a token in a later version does not remove it from a push.
 pub(crate) fn check_upload_history(root: &Path) -> Result<()> {
-    let objects = run(root, &["rev-list", "--objects", "HEAD"])?;
+    check_upload_history_ref(root, "HEAD")
+}
+pub(crate) fn check_upload_history_ref(root: &Path, reference: &str) -> Result<()> {
+    let objects = run(root, &["rev-list", "--objects", reference])?;
     for line in objects.lines() {
         let Some((object, path)) = line.split_once(' ') else {
             continue;
@@ -719,7 +875,8 @@ fn sync_remote_inner(root: &Path) -> Result<()> {
     crate::git_auth::remember_state(root, &url, &settings.branch, "synced")?;
     Ok(())
 }
-pub fn commit_and_sync(
+#[cfg(test)]
+fn commit_and_sync(
     root: &Path,
     message: &str,
     name: Option<&str>,
@@ -732,6 +889,12 @@ pub fn commit_and_sync(
         local_saved: true,
         remote_synced: false,
         remote_error: None,
+        commit_hash: snapshot(root)?.head.unwrap_or_default(),
+        remote_branch: None,
+        remote_head: None,
+        remote_merged: false,
+        committed_capabilities: Vec::new(),
+        excluded_pending_changes: Vec::new(),
     };
     match remote_settings(root) {
         Ok(settings) if settings.url.is_some() => match sync_remote(root) {

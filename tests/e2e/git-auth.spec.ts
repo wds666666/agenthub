@@ -53,7 +53,7 @@ for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 
     await page.getByRole("button", { name: "验证并保存登录" }).click();
     await expect(dialog).toHaveCount(0);
     await expect(page.getByText("上次验证可读取")).toBeVisible();
-    await page.getByRole("button", { name: "同步远端", exact: true }).click();
+    await page.getByRole("button", { name: "推送已保存版本", exact: true }).click();
     await expect(dialog).toBeVisible();
     await expect(page.getByRole("button", { name: "登录并重试同步", exact: true }).last()).toBeVisible();
     await expect(token).toHaveValue("");

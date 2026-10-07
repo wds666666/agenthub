@@ -1012,7 +1012,7 @@ fn legacy_applied_transaction_enables_missing_target_on_reopen() {
 }
 
 #[test]
-fn automatic_sync_profiles_run_after_mutation_and_skip_noop_transactions() {
+fn automatic_sync_profiles_read_saved_head_and_skip_noop_transactions() {
     let (_temp, hub) = fixture();
     seed(&hub);
     let selection = SyncSelection {
@@ -1041,6 +1041,13 @@ fn automatic_sync_profiles_run_after_mutation_and_skip_noop_transactions() {
     fs::write(
         hub.paths.skills.join("review/SKILL.md"),
         "---\nname: review\ndescription: Updated review\n---\n# Review",
+    )
+    .unwrap();
+    git::commit(
+        &hub.paths.root,
+        "Reviewed content",
+        Some("Test"),
+        Some("test@example.com"),
     )
     .unwrap();
     let changed = transaction::run_auto_sync(&hub.paths, &hub.store).unwrap();
@@ -1082,6 +1089,13 @@ fn legacy_strict_policy_does_not_expand_saved_scope() {
         })
         .unwrap();
 
+    git::commit(
+        &hub.paths.root,
+        "Reviewed content",
+        Some("Test"),
+        Some("test@example.com"),
+    )
+    .unwrap();
     let outcomes = transaction::run_auto_sync(&hub.paths, &hub.store).unwrap();
     assert!(outcomes[0].changed, "{:?}", outcomes[0]);
     assert!(temp.path().join(".cursor/skills/review/SKILL.md").is_file());
@@ -1109,6 +1123,13 @@ fn deleting_canonical_capability_runs_saved_auto_sync_scope() {
         })
         .unwrap();
 
+    git::commit(
+        &hub.paths.root,
+        "Reviewed content",
+        Some("Test"),
+        Some("test@example.com"),
+    )
+    .unwrap();
     canonical::delete_capability(&hub.paths, CapabilityKind::Skill, "review").unwrap();
     let outcomes = transaction::run_auto_sync(&hub.paths, &hub.store).unwrap();
 

@@ -1,7 +1,7 @@
 use agenthub_core::{
     canonical, git,
     models::{CapabilityKind, SyncSelection, Target},
-    planner, scanner, secrets, transaction, versions, AgentHub,
+    planner, scanner, secrets, transaction, version_save, versions, AgentHub,
 };
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -28,6 +28,19 @@ enum Command {
         branch: String,
         #[arg(long)]
         username: Option<String>,
+    },
+    Discover {
+        #[arg(long, default_value = "all")]
+        target: String,
+    },
+    ImportPlan {
+        #[arg(long,required=true,action=clap::ArgAction::Append)]
+        id: Vec<String>,
+    },
+    ImportApply {
+        plan_id: String,
+        #[arg(long)]
+        confirm: bool,
     },
     Init {
         #[arg(long)]
@@ -75,6 +88,14 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    Version {
+        #[command(subcommand)]
+        command: VersionCommand,
+    },
+    Remote {
+        #[command(subcommand)]
+        command: RemoteCommand,
+    },
     Git {
         #[command(subcommand)]
         command: GitCommand,
@@ -102,6 +123,68 @@ enum TargetCommand {
 enum AutoSyncCommand {
     Status,
     Run,
+    /// Enable only the exact previously reviewed host Plan; may write tool files.
+    Enable {
+        target: TargetArg,
+        #[arg(long)]
+        plan_id: String,
+        #[arg(long)]
+        confirm: bool,
+    },
+    Disable {
+        target: TargetArg,
+    },
+}
+#[derive(clap::Args)]
+struct SaveArgs {
+    #[arg(short, long)]
+    message: String,
+    #[arg(long)]
+    name: Option<String>,
+    #[arg(long)]
+    email: Option<String>,
+    #[arg(long,action=clap::ArgAction::Append,conflicts_with="selection")]
+    only: Vec<String>,
+    /// JSON object with "only" capability keys and optional "exclude" kinds.
+    #[arg(long)]
+    selection: Option<PathBuf>,
+    #[arg(long,action=clap::ArgAction::Append)]
+    exclude: Vec<String>,
+    #[arg(long, conflicts_with = "local_only")]
+    push: bool,
+    #[arg(long)]
+    local_only: bool,
+    #[arg(long, default_value = "none", conflicts_with = "no_host_sync")]
+    host_sync: String,
+    #[arg(long)]
+    no_host_sync: bool,
+    #[arg(long)]
+    json: bool,
+}
+#[derive(Subcommand)]
+enum VersionCommand {
+    Plan {
+        #[command(flatten)]
+        args: SaveArgs,
+    },
+    Save {
+        #[command(flatten)]
+        args: SaveArgs,
+    },
+    Apply {
+        plan_id: String,
+        #[arg(long)]
+        confirm: bool,
+    },
+    Inspect {
+        plan_id: String,
+    },
+}
+#[derive(Subcommand)]
+enum RemoteCommand {
+    Push,
+    Status,
+    Receive,
 }
 #[derive(Subcommand)]
 enum GitCommand {
@@ -137,14 +220,15 @@ enum GitCommand {
     Disconnect,
     Sync,
     Status,
-    Diff,
+    Diff {
+        #[arg(long)]
+        capability: Option<String>,
+        #[arg(long)]
+        include_untracked: bool,
+    },
     Commit {
-        #[arg(short, long)]
-        message: String,
-        #[arg(long)]
-        name: Option<String>,
-        #[arg(long)]
-        email: Option<String>,
+        #[command(flatten)]
+        args: SaveArgs,
     },
     Log,
     Restore {
@@ -196,6 +280,28 @@ fn main() -> Result<()> {
             )?;
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
+        Command::Discover { target } => println!(
+            "{}",
+            serde_json::to_string_pretty(&scanner::scan_global(
+                &hub.paths,
+                &parse_targets(&target)?
+            )?)?
+        ),
+        Command::ImportPlan { id } => println!(
+            "{}",
+            serde_json::to_string_pretty(&agenthub_core::imports::preview(
+                &hub.paths, &hub.store, &id
+            )?)?
+        ),
+        Command::ImportApply { plan_id, confirm } => println!(
+            "{}",
+            serde_json::to_string_pretty(&agenthub_core::imports::apply(
+                &hub.paths,
+                &hub.store,
+                plan_id.parse()?,
+                confirm
+            )?)?
+        ),
         Command::Init { import_all, empty } => {
             anyhow::ensure!(
                 !hub.store.initialized()?,
@@ -313,6 +419,54 @@ fn main() -> Result<()> {
                 serde_json::to_string_pretty(&hub.store.auto_sync_profiles()?)?
             ),
             AutoSyncCommand::Run => print_auto_sync(&hub)?,
+            AutoSyncCommand::Enable {
+                target,
+                plan_id,
+                confirm,
+            } => {
+                anyhow::ensure!(confirm, "review host changes and pass --confirm");
+                let plan = hub
+                    .store
+                    .plan(&plan_id)?
+                    .context("reviewed Plan not found")?;
+                anyhow::ensure!(plan.target == target.0, "Plan target mismatch");
+                let selection = plan
+                    .selection
+                    .clone()
+                    .context("explicit selection required")?;
+                anyhow::ensure!(
+                    selection.manages_skills()
+                        || selection.manages_mcp()
+                        || selection.manages_plugins()
+                        || selection.manages_rules(),
+                    "select at least one managed category"
+                );
+                let tx = transaction::apply(&hub.paths, &hub.store, &plan)?;
+                let profile = agenthub_core::models::AutoSyncProfile {
+                    target: target.0,
+                    enabled: true,
+                    needs_review: false,
+                    selection,
+                };
+                hub.store.set_auto_sync_profile(&profile)?;
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(
+                        &serde_json::json!({"profile":profile,"transaction":tx})
+                    )?
+                );
+            }
+            AutoSyncCommand::Disable { target } => {
+                let mut profile = hub
+                    .store
+                    .auto_sync_profiles()?
+                    .into_iter()
+                    .find(|p| p.target == target.0)
+                    .context("profile not found")?;
+                profile.enabled = false;
+                hub.store.set_auto_sync_profile(&profile)?;
+                println!("{}", serde_json::to_string_pretty(&profile)?);
+            }
         },
         Command::Rollback { transaction_id } => println!(
             "{}",
@@ -326,6 +480,40 @@ fn main() -> Result<()> {
             "{}",
             serde_json::to_string_pretty(&hub.store.recent_transactions(100)?)?
         ),
+        Command::Version { command } => match command {
+            VersionCommand::Plan { args } => save_command(&hub, args, true)?,
+            VersionCommand::Save { args } => save_command(&hub, args, false)?,
+            VersionCommand::Apply { plan_id, confirm } => println!(
+                "{}",
+                serde_json::to_string_pretty(&version_save::apply(
+                    &hub.paths,
+                    &hub.store,
+                    plan_id.parse()?,
+                    confirm
+                )?)?
+            ),
+            VersionCommand::Inspect { plan_id } => println!(
+                "{}",
+                serde_json::to_string_pretty(&version_save::inspect(
+                    &hub.paths,
+                    plan_id.parse()?
+                )?)?
+            ),
+        },
+        Command::Remote { command } => match command {
+            RemoteCommand::Push => println!(
+                "{}",
+                serde_json::to_string_pretty(&version_save::push_committed(&hub.paths)?)?
+            ),
+            RemoteCommand::Status => println!(
+                "{}",
+                serde_json::to_string_pretty(&git::remote_settings(&hub.paths.root)?)?
+            ),
+            RemoteCommand::Receive => {
+                git::receive_remote(&hub.paths.root)?;
+                println!("received library versions; tools unchanged");
+            }
+        },
         Command::Git { command } => match command {
             GitCommand::Login {
                 url,
@@ -391,25 +579,18 @@ fn main() -> Result<()> {
                 )?)?
             ),
             GitCommand::Status => println!("{}", git::status(&hub.paths.root)?),
-            GitCommand::Diff => println!("{}", git::diff(&hub.paths.root)?),
-            GitCommand::Commit {
-                message,
-                name,
-                email,
+            GitCommand::Diff {
+                capability,
+                include_untracked,
             } => println!(
                 "{}",
-                serde_json::to_string_pretty(&transaction::save_version(
-                    &hub.paths,
-                    &hub.store,
-                    &message,
-                    name.as_deref(),
-                    email.as_deref()
-                )?)?
+                git::diff_review(&hub.paths.root, capability.as_deref(), include_untracked)?
             ),
+            GitCommand::Commit { args } => save_command(&hub, args, false)?,
             GitCommand::Log => println!("{}", git::log(&hub.paths.root)?),
             GitCommand::Restore { commit, capability } => {
                 git::restore(&hub.paths.root, &commit, capability.as_deref())?;
-                print_auto_sync(&hub)?
+                println!("restored into pending library changes; tools unchanged");
             }
         },
         Command::Secret { command } => match command {
@@ -489,5 +670,56 @@ fn print_auto_sync(hub: &AgentHub) -> Result<()> {
         outcomes.iter().all(|outcome| outcome.error.is_none()),
         "one or more automatic sync targets failed"
     );
+    Ok(())
+}
+
+fn save_command(hub: &AgentHub, args: SaveArgs, preview_only: bool) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Selection {
+        only: Vec<agenthub_core::models::CapabilityKey>,
+        #[serde(default)]
+        exclude: Vec<CapabilityKind>,
+    }
+    let mut options = version_save::SaveOptions {
+        push: args.push,
+        host_sync: args.host_sync,
+        ..Default::default()
+    };
+    if let Some(path) = args.selection {
+        let selection: Selection = serde_json::from_slice(&std::fs::read(path)?)?;
+        options.only = Some(selection.only);
+        options.exclude = selection.exclude;
+    } else if !args.only.is_empty() {
+        options.only = Some(
+            args.only
+                .iter()
+                .map(|v| version_save::parse_key(v))
+                .collect::<Result<_>>()?,
+        );
+    }
+    for kind in args.exclude {
+        options
+            .exclude
+            .push(version_save::parse_key(&format!("{kind}:placeholder"))?.kind);
+    }
+    let plan = version_save::preview(
+        &hub.paths,
+        &hub.store,
+        &args.message,
+        args.name.as_deref(),
+        args.email.as_deref(),
+        options,
+    )?;
+    if preview_only {
+        println!("{}", serde_json::to_string_pretty(&plan)?);
+    } else {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&version_save::apply(
+                &hub.paths, &hub.store, plan.id, true
+            )?)?
+        );
+    }
     Ok(())
 }

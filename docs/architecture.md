@@ -1,5 +1,7 @@
 # Architecture
 
+Desktop local Skill import uses a native directory picker and a core preview/apply flow. It reads one explicitly chosen Skill directory, independently of automatic tool discovery. The shared portable-content inspector, capability comparison and atomic Canonical activation validate complete support files without discovering nested Skills. Import leaves versions, host selections and host files unchanged.
+
 ```text
 Canonical files --hash--> Planner --steps--> Transaction executor --> host
       |                    |                       |                 |
@@ -16,11 +18,11 @@ The shared `agenthub-core` Rust crate owns paths, schemas, scanning, adapters, p
 
 Installers supply the Desktop and same-version CLI as one product. The management Skill is a separate manual installation. Windows NSIS registers only a user PATH entry and tracks whether it added that entry; uninstall preserves preexisting user entries. MSI uses a user-scoped Environment component. The skill's PowerShell wrapper resolves installed/portable executables even when its parent process retains an old PATH. Installer registration runs hidden and does not open AgentHub storage. Ubuntu deb installs the CLI in `/usr/bin` without adding management Skills or Rules. Portable Windows distribution is a complete ZIP, not an isolated GUI executable.
 
-CLI `validate` checks portable file structure and supported schemas without executing payloads. Version saves and reconciled remote merges validate before committing. CLI Plans accept an explicit JSON `SyncSelection`; absent selection retains full compatible scope. Selected IDs and unknown fields are checked before planning. Desktop-only operations remain explicitly documented by the skill; agents must not fabricate CLI endpoints or mutate SQLite as an API.
+CLI `validate` checks portable file structure and supported schemas without executing payloads. Version saves and reconciled remote merges validate before committing. CLI Plans accept an explicit JSON `SyncSelection`; absent selection retains full compatible scope. Selected IDs and unknown fields are checked before planning. CLI and Desktop share selected reverse-import preflight and Apply; CLI can configure automatic profiles only from an exact reviewed host Plan. Remaining Desktop-only operations are documented by the Skill; agents must not fabricate endpoints or mutate SQLite as an API.
 
 Desktop IPC commands that touch Git, SQLite, the filesystem, scanners, adapters, planning, backups or verification execute as asynchronous Tauri commands so blocking work never runs on the WebView event thread. Every external process launched by the desktop uses a shared platform wrapper; on Windows it applies `CREATE_NO_WINDOW`. Git also disables terminal prompting and pagers so an unexpected credential helper or pager cannot stall the desktop. Hiding the desktop executable itself is not considered sufficient because each console child process has an independent creation policy.
 
-Automatic sync is coordinated inside `agenthub-core`. AgentHub mutation commands save Canonical content first and then run every enabled target profile independently through Plan → backup → Apply → verify. No background filesystem watcher is used, and host-side changes are never imported by this path.
+Automatic sync is coordinated inside `agenthub-core`. Library mutations remain pending. Explicit automatic runs read HEAD; version saves optionally project only saved capabilities through Plan → backup → Apply → verify. No background filesystem watcher is used, and host-side changes are never imported by this path.
 
 `~/.agents/skills` is a separate Skills-only shared target named `agents`. It is not Canonical: users can project a selected subset to it, explicitly project an empty Skills domain to clear it, or leave it untouched. Because multiple agents may load this directory alongside their own user directory, its Plan and transaction stay independent from Cursor, Codex and Claude Code.
 
@@ -36,7 +38,7 @@ Deleting SQLite permits inventory reconstruction from Canonical files. Transacti
 
 ## Library reset and remote versions
 Desktop operations are serialized by a process-wide guard. Reset closes SQLite, moves the complete active root to a private sibling recovery directory, creates a fresh uninitialized root, and returns to import selection. Hosts are untouched; all automatic profiles and remote settings are reset. Recovery copies contain secrets and must stay private.
-Remote settings live in repository-local Git configuration, not versioned content. Version saves commit locally first; remote failures are returned separately from local success. Explicit remote sync requires a clean working tree and reconciles by fetch and merge before push. Remote updates do not silently project to hosts.
+Remote settings live in repository-local Git configuration, not versioned content. Version saves commit locally; optional push failures are returned separately. Publication reconciles in isolation and preserves disjoint pending content. Download-only receipt requires a clean working tree. Remote updates do not silently project to hosts.
 
 ## Local repository authentication
 
@@ -48,10 +50,14 @@ GitHub and self-hosted Git/Gitea HTTPS repositories accept a username and access
 
 ## Selected capability synchronization (current contract)
 
-Preserve is the default: add/replace only explicitly selected capabilities; leave every unselected host resource intact, including retired selections and library deletions. Replace reconciles only explicitly managed categories to the selected subset. Neither mode expands scope. Rules have individual IDs; creating a rule saves only to Canonical and never distributes it or selects it. Existing selected rules may synchronize on subsequent edits. Old automatic profiles pause for mode/rule-scope review. Package installation supplies Desktop and CLI, with the manager Skill available separately for manual installation.
+Preserve is the default: add/replace only explicitly selected capabilities; leave every unselected host resource intact, including retired selections and library deletions. Replace reconciles only explicitly managed categories to the selected subset. Neither mode expands scope. Rules have individual IDs; creating a rule saves only to Canonical and never distributes it or selects it. Existing selected rules may be projected after an explicitly requested committed save. Old automatic profiles pause for mode/rule-scope review. Package installation supplies Desktop and CLI, with the manager Skill available separately for manual installation.
 
 Discovery uses a shared comparison digest of portable capability content, separate from transaction file digests. MCP compares normalized target-representable configuration, Rules exclude generated wrappers, Plugins compare their complete payload, and Skills retain runtime exclusions. Generated rule containers are identified explicitly. Equal content is blocked from reverse import in the backend as well as the UI; same-name differences remain reviewable. Parsing/identity uncertainty blocks destructive rewriting rather than treating the configuration as empty.
 
 Version recovery uses a core preview/apply API shared by Desktop and CLI. Detached private candidate checkouts validate content/history before replacement. Canonical roots and schema file alone are replaced; a journal and private backup preserve the previous content/index for failed or interrupted activation. Plans bind the current content, Git HEAD/index, candidate content and connected remote configuration. No user tool path or machine state is written.
 
 Read-only discovery isolates host failures by tool and capability category. Missing optional generated rule directories are empty; malformed/unreadable collections appear as blocked, unknown resources while other categories remain visible. Unknown resources cannot be imported or cleaned up. Generated Cursor rule ownership requires the dedicated manifest and exact generator marker; a same-named user plugin is not a generated container. Projection still rejects unknown ownership or malformed configuration before writing.
+
+## Reviewed, capability-scoped version saves
+
+Version saving is separate from remote publication and host projection. A version Plan selects complete capabilities (including deletions), binds HEAD, the real index, all pending content and local sync profiles, and validates an isolated candidate. Apply uses Git path-scoped commits; unrelated staged and unstaged edits remain in place. Push reconciles in a private checkout, refuses remote changes overlapping pending capabilities, and brings back non-overlapping committed updates with Git two-tree checks. It never stashes user edits. Automatic projection reads a committed snapshot and intersects the saved profiles with the explicitly committed capabilities in preserve mode. Imports and ordinary edits do not implicitly project uncommitted files. Version Plans are local runtime state, not portable content.

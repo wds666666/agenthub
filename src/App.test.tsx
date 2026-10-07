@@ -66,7 +66,7 @@ describe("AgentHub shell", () => {
     fireEvent.click(await screen.findByRole("button", { name: /同步到工具/ }));
     expect(await screen.findByRole("heading", { name: "同步到工具" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /开启自动同步/ })).toBeDisabled();
-    expect(screen.getByText(/后续修改会立即投影/)).toBeInTheDocument();
+    expect(screen.getByText(/更新工具从已保存版本读取/)).toBeInTheDocument();
   });
 
   it("selects only unimported deletable host resources and requires acknowledgement", async () => {

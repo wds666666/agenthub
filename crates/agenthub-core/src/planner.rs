@@ -151,6 +151,7 @@ pub fn create_with_selection(
     let mut presence = BTreeMap::new();
     let mut changed_files = BTreeMap::new();
     let mut removed_resources = Vec::new();
+    let mut resource_changes = Vec::new();
     for domain in domains {
         let actual = actual_files(&domain)?;
         if domain.kind == CapabilityKind::Mcp {
@@ -170,6 +171,32 @@ pub fn create_with_selection(
             } else {
                 "mcpServers"
             };
+            let mut names = std::collections::BTreeSet::new();
+            if let Some(object) = current[field].as_object() {
+                names.extend(object.keys());
+            }
+            if let Some(object) = desired[field].as_object() {
+                names.extend(object.keys());
+            }
+            for id in names {
+                let old = current[field].get(id);
+                let new = desired[field].get(id);
+                if old != new {
+                    resource_changes.push(crate::models::PlanResourceChange {
+                        kind: CapabilityKind::Mcp,
+                        id: id.clone(),
+                        action: if old.is_none() {
+                            "create"
+                        } else if new.is_none() {
+                            "delete"
+                        } else {
+                            "update"
+                        }
+                        .into(),
+                        paths: vec![domain.target_path.clone()],
+                    });
+                }
+            }
             if let Some(servers) = current[field].as_object() {
                 for id in servers
                     .keys()
@@ -196,6 +223,36 @@ pub fn create_with_selection(
                 .unwrap_or("");
             let old_blocks = crate::rule_projection::blocks(current)?;
             let new_blocks = crate::rule_projection::blocks(desired)?;
+            let names: std::collections::BTreeSet<_> = old_blocks
+                .iter()
+                .chain(&new_blocks)
+                .map(|(id, _, _)| id)
+                .collect();
+            for id in names {
+                let old = old_blocks
+                    .iter()
+                    .find(|(key, _, _)| key == id)
+                    .map(|(_, body, _)| body);
+                let new = new_blocks
+                    .iter()
+                    .find(|(key, _, _)| key == id)
+                    .map(|(_, body, _)| body);
+                if old != new {
+                    resource_changes.push(crate::models::PlanResourceChange {
+                        kind: CapabilityKind::Rule,
+                        id: id.clone(),
+                        action: if old.is_none() {
+                            "create"
+                        } else if new.is_none() {
+                            "delete"
+                        } else {
+                            "update"
+                        }
+                        .into(),
+                        paths: vec![domain.target_path.clone()],
+                    });
+                }
+            }
             for (id, _, _) in &old_blocks {
                 if !new_blocks.iter().any(|(new_id, _, _)| new_id == id) {
                     removed_resources.push(CapabilityKey {
@@ -280,6 +337,32 @@ pub fn create_with_selection(
         .filter_map(|step| Some((step.capability_kind?, step.capability_id.clone()?)))
         .collect();
     presence.retain(|owner, _| changed_owners.contains(owner));
+    for ((kind, id), (old, new)) in &presence {
+        if *kind == CapabilityKind::Mcp
+            || (target == Target::Codex && *kind == CapabilityKind::Rule)
+        {
+            continue;
+        }
+        resource_changes.push(crate::models::PlanResourceChange {
+            kind: *kind,
+            id: id.clone(),
+            action: if !old && *new {
+                "create"
+            } else if *old && !new {
+                "delete"
+            } else {
+                "update"
+            }
+            .into(),
+            paths: steps
+                .iter()
+                .filter(|s| {
+                    s.capability_kind == Some(*kind) && s.capability_id.as_ref() == Some(id)
+                })
+                .map(|s| s.path.clone())
+                .collect(),
+        });
+    }
     let summary = summarize(presence, changed_files);
     Ok(Plan {
         id: Uuid::new_v4().to_string(),
@@ -289,6 +372,7 @@ pub fn create_with_selection(
         git,
         steps,
         removed_resources,
+        resource_changes,
         selection: selection.cloned(),
         summary,
         warnings,

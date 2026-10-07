@@ -52,7 +52,7 @@ fn runtime(paths: &AgentHubPaths) -> Result<()> {
     fs::create_dir_all(root)?;
     Ok(())
 }
-fn lock(paths: &AgentHubPaths) -> Result<fs::File> {
+pub(crate) fn lock(paths: &AgentHubPaths) -> Result<fs::File> {
     runtime(paths)?;
     let path = paths.root.join("runtime/versions.lock");
     if path.exists() {
@@ -156,10 +156,10 @@ fn files_filtered(
     }
     Ok(result)
 }
-fn digest(root: &Path) -> Result<String> {
+pub(crate) fn digest(root: &Path) -> Result<String> {
     Ok(canonical::sha256(&serde_json::to_vec(&files(root)?)?))
 }
-fn index_digest(paths: &AgentHubPaths) -> Result<String> {
+pub(crate) fn index_digest(paths: &AgentHubPaths) -> Result<String> {
     let index = paths.root.join(".git/index");
     if index.exists() {
         anyhow::ensure!(
@@ -230,7 +230,7 @@ fn group(
         })
         .collect()
 }
-fn checkout(paths: &AgentHubPaths, dest: &Path, sha: &str, remote: bool) -> Result<()> {
+pub(crate) fn checkout(paths: &AgentHubPaths, dest: &Path, sha: &str, remote: bool) -> Result<()> {
     let source = paths.root.canonicalize()?;
     git::run(
         &paths.root,

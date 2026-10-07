@@ -459,6 +459,13 @@ fn creating_rules_never_writes_hosts_or_expands_auto_scope() {
     let saved = transaction::save_rule(&hub.paths, &hub.store, &draft, true).unwrap();
     assert!(saved.auto_sync.is_empty());
     assert!(!hub.paths.user_home.join(".codex/AGENTS.md").exists());
+    agenthub_core::git::commit(
+        &hub.paths.root,
+        "Reviewed rules",
+        Some("Test"),
+        Some("test@example.com"),
+    )
+    .unwrap();
     transaction::run_auto_sync(&hub.paths, &hub.store).unwrap();
     let body = fs::read_to_string(hub.paths.user_home.join(".codex/AGENTS.md")).unwrap();
     assert!(body.contains("# Rule"));

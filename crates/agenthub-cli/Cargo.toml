@@ -9,6 +9,7 @@ name = "agenthub"
 path = "src/main.rs"
 
 [dependencies]
+serde.workspace = true
 agenthub-core.workspace = true
 anyhow.workspace = true
 clap.workspace = true

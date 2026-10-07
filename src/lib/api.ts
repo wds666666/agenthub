@@ -28,11 +28,14 @@ export interface CapabilityKey { kind: Kind; id: string }
 export interface CapabilityBatchDeleteResult { deleted: CapabilityKey[]; backup_path: string; auto_sync: AutoSyncOutcome[]; auto_sync_error?: string }
 export interface CapabilityDeleteResult { id: string; kind: Kind; auto_sync: AutoSyncOutcome[] }
 export interface ScanImportResult { imported: string[]; skipped_duplicates: number; auto_sync: AutoSyncOutcome[] }
+export interface LocalSkillPreview { id: string; item: ScanItem; files: Array<{ path: string; size: number }>; excluded: string[]; duplicate_of?: string; canonical_digest: string }
 export interface PolicySettings { sync_mode?: "preserve" | "replace"; strict_authoritative: boolean; sync_after_reverse_import: boolean }
-export interface Plan { id: string; target: Target; steps: PlanStep[]; removed_resources?: CapabilityKey[]; summary: PlanCapabilitySummary[]; selection?: SyncSelection; warnings: string[]; canonical_digest: string; git: { head?: string; dirty: boolean } }
+export interface Plan { resource_changes?: Array<{ kind: Kind; id: string; action: string; paths: string[] }>; id: string; target: Target; steps: PlanStep[]; removed_resources?: CapabilityKey[]; summary: PlanCapabilitySummary[]; selection?: SyncSelection; warnings: string[]; canonical_digest: string; git: { head?: string; dirty: boolean } }
 export interface RuleDocument { schemaVersion: number; id: string; displayName: string; activation: "always" | "manual" | "paths"; paths: string[]; targets: Target[]; body: string }
 export interface RemoteSettings { url?: string; branch: string; state?: "disconnected" | "unverified" | "read_verified" | "synced" | "auth_failed" | "network_error" | "sync_failed"; credential_saved?: boolean }
-export interface CommitResult { auto_sync?: AutoSyncOutcome[]; auto_sync_error?: string; local_saved: boolean; remote_synced: boolean; remote_error?: string }
+export interface CommitResult { commit_hash?: string; remote_branch?: string; remote_head?: string; remote_merged?: boolean; committed_capabilities?: CapabilityChange[]; excluded_pending_changes?: CapabilityChange[]; auto_sync?: AutoSyncOutcome[]; auto_sync_error?: string; local_saved: boolean; remote_synced: boolean; remote_error?: string }
+export interface SaveOptions { only?: CapabilityKey[]; exclude?: Kind[]; push: boolean; host_sync: string }
+export interface SavePreview { file_review?: Array<{ path: string; size: number; digest: string; binary: boolean; credential_warning: boolean }>; id: string; changes: CapabilityChange[]; excluded_pending_changes: CapabilityChange[]; head?: string; remote_head?: string; remote_url?: string; remote_branch?: string; host_plans: Plan[]; options: SaveOptions }
 export interface RestoreResult { imported: number; branch: string; recovery_path: string }
 export interface GitIdentity { name?: string; email?: string }
 const isTauri = () => "__TAURI_INTERNALS__" in window;
@@ -42,6 +45,8 @@ export const api = {
   dashboard: () => call<Dashboard>("dashboard"),
   runtimeDiagnostics: () => call<RuntimeDiagnostics>("runtime_diagnostics"),
   inventory: () => call<Capability[]>("inventory"),
+  pickLocalSkill: () => call<LocalSkillPreview | null>("pick_local_skill"),
+  importLocalSkill: (planId: string) => call<ScanImportResult>("import_local_skill", { planId }),
   capabilityDetail: (kind: Kind, id: string) => call<CapabilityDetail>("capability_detail", { kind, id }),
   readRule: (id: string) => call<RuleDocument>("read_rule", { id }),
   saveRule: (rule: RuleDocument, create: boolean) => call<CapabilityMutationResult>("save_rule", { rule, create }),
@@ -72,6 +77,7 @@ export const api = {
   forgetRemoteCredentials: () => call<void>("forget_remote_credentials"),
   openTokenSettings: (url: string, platform: "github" | "git") => call<void>("open_token_settings", { url, platform }),
   disconnectRemote: () => call<void>("disconnect_remote"),
+  receiveRemote: () => call<void>("receive_remote"),
   syncRemote: () => call<{ auto_sync: AutoSyncOutcome[]; auto_sync_error?: string }>("sync_remote"),
   gitChanges: () => call<CapabilityChange[]>("git_changes"),
   versionRecoveryPlan: (action: "discard" | "remote") => call<VersionPreview>("version_recovery_plan", { action }),
@@ -80,6 +86,8 @@ export const api = {
   gitDiff: () => call<string>("git_diff"),
   gitIdentity: () => call<GitIdentity>("git_identity"),
   gitLog: () => call<string>("git_log"),
+  versionSavePlan: (message: string, options: SaveOptions, name?: string, email?: string) => call<SavePreview>("version_save_plan", { message, options, name, email }),
+  versionSaveApply: (planId: string) => call<CommitResult>("version_save_apply", { planId }),
   gitCommit: (message: string, name?: string, email?: string) => call<CommitResult>("git_commit", { message, name, email }),
   debugEvent: (event: string, context?: string) => {
     if (!isTauri()) { console.debug(`[AgentHub] ${event}`, context ?? ""); return Promise.resolve(); }

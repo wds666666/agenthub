@@ -26,6 +26,27 @@ pub(crate) struct SkillContent {
     entries: Vec<DirEntry>,
 }
 
+impl SkillContent {
+    pub(crate) fn files(&self, source: &Path) -> Result<Vec<crate::models::CapabilityFile>> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.file_type().is_file())
+            .map(|entry| {
+                Ok(crate::models::CapabilityFile {
+                    path: entry
+                        .path()
+                        .strip_prefix(source)?
+                        .components()
+                        .map(|part| part.as_os_str().to_string_lossy())
+                        .collect::<Vec<_>>()
+                        .join("/"),
+                    size: entry.metadata()?.len(),
+                })
+            })
+            .collect()
+    }
+}
+
 fn is_runtime(entry: &DirEntry) -> bool {
     if entry.depth() == 0 {
         return false;

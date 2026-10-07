@@ -267,7 +267,16 @@ pub struct GitSnapshot {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PlanResourceChange {
+    pub kind: CapabilityKind,
+    pub id: String,
+    pub action: String,
+    pub paths: Vec<PathBuf>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Plan {
+    #[serde(default)]
+    pub resource_changes: Vec<PlanResourceChange>,
     pub id: String,
     pub target: Target,
     pub canonical_digest: String,
@@ -331,6 +340,8 @@ pub struct AutoSyncOutcome {
     pub changed: bool,
     pub transaction_id: Option<String>,
     pub error: Option<String>,
+    #[serde(default)]
+    pub plan: Option<Plan>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

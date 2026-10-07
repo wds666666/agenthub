@@ -6,6 +6,7 @@ pub mod comparison;
 pub mod git;
 pub mod git_auth;
 pub mod host;
+pub mod imports;
 pub mod models;
 pub mod paths;
 pub mod planner;
@@ -17,6 +18,7 @@ pub mod skill_changes;
 mod skill_content;
 pub mod storage;
 pub mod transaction;
+pub mod version_save;
 pub mod versions;
 
 use anyhow::Result;

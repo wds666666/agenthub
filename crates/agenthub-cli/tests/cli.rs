@@ -70,3 +70,75 @@ fn selection_limits_plan_to_reviewed_skills_without_host_writes() {
         .unwrap();
     assert!(!output.status.success());
 }
+
+#[test]
+fn selective_version_cli_review_apply_and_untracked_diff() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().join("library");
+    assert!(cli(&root, &["init", "--empty"]).status.success());
+    for id in ["one", "two"] {
+        let p = root.join("skills").join(id);
+        fs::create_dir_all(&p).unwrap();
+        fs::write(p.join("SKILL.md"), format!("# {id}\nnew reviewed body\n")).unwrap();
+    }
+    let diff = cli(
+        &root,
+        &[
+            "git",
+            "diff",
+            "--capability",
+            "skill:one",
+            "--include-untracked",
+        ],
+    );
+    assert!(diff.status.success());
+    let text = String::from_utf8_lossy(&diff.stdout);
+    assert!(text.contains("new reviewed body"));
+    assert!(!text.contains("skills/two"));
+    let preview = cli(
+        &root,
+        &[
+            "version",
+            "plan",
+            "--message",
+            "Only one",
+            "--only",
+            "skill:one",
+            "--name",
+            "Fixture",
+            "--email",
+            "fixture@example.com",
+            "--no-host-sync",
+            "--json",
+        ],
+    );
+    assert!(
+        preview.status.success(),
+        "{}",
+        String::from_utf8_lossy(&preview.stderr)
+    );
+    let plan: serde_json::Value = serde_json::from_slice(&preview.stdout).unwrap();
+    let id = plan["id"].as_str().unwrap();
+    assert_eq!(plan["excluded_pending_changes"][0]["id"], "two");
+    assert_eq!(plan["options"]["push"], false);
+    assert!(!cli(&root, &["version", "apply", id]).status.success());
+    let saved = cli(&root, &["version", "apply", id, "--confirm"]);
+    assert!(
+        saved.status.success(),
+        "{}",
+        String::from_utf8_lossy(&saved.stderr)
+    );
+    let result: serde_json::Value = serde_json::from_slice(&saved.stdout).unwrap();
+    assert_eq!(result["auto_sync"], serde_json::json!([]));
+    assert_eq!(result["commit_hash"].as_str().unwrap().len(), 40);
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .args(["ls-tree", "-r", "--name-only", "HEAD"])
+        .output()
+        .unwrap();
+    let tree = String::from_utf8_lossy(&output.stdout);
+    assert!(tree.contains("skills/one/SKILL.md"));
+    assert!(!tree.contains("skills/two/SKILL.md"));
+    assert!(root.join("skills/two/SKILL.md").exists());
+}

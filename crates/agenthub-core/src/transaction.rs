@@ -44,6 +44,11 @@ pub fn sync_once(
 ) -> Result<SyncRunResult> {
     let plan = crate::planner::create_with_selection(paths, target, selection)?;
     if plan.steps.is_empty() {
+        record_baseline(
+            store,
+            target,
+            &projection_with_selection(paths, target, selection)?,
+        )?;
         return Ok(SyncRunResult {
             changed: false,
             plan,
@@ -59,19 +64,6 @@ pub fn sync_once(
     })
 }
 
-fn auto_sync_result(paths: &AgentHubPaths, store: &Store) -> crate::models::RemoteSyncResult {
-    match run_auto_sync(paths, store) {
-        Ok(auto_sync) => crate::models::RemoteSyncResult {
-            auto_sync,
-            auto_sync_error: None,
-        },
-        Err(error) => crate::models::RemoteSyncResult {
-            auto_sync: Vec::new(),
-            auto_sync_error: Some(crate::secrets::redact(&format!("{error:#}"))),
-        },
-    }
-}
-
 pub fn save_version(
     paths: &AgentHubPaths,
     store: &Store,
@@ -79,23 +71,16 @@ pub fn save_version(
     name: Option<&str>,
     email: Option<&str>,
 ) -> Result<crate::git::CommitResult> {
-    let mut result = crate::git::commit_and_sync(&paths.root, message, name, email)?;
-    let sync = auto_sync_result(paths, store);
-    result.auto_sync = sync.auto_sync;
-    result.auto_sync_error = sync.auto_sync_error;
-    Ok(result)
+    let preview =
+        crate::version_save::preview(paths, store, message, name, email, Default::default())?;
+    crate::version_save::apply(paths, store, preview.id, true)
 }
-
 pub fn sync_remote(
     paths: &AgentHubPaths,
-    store: &Store,
+    _store: &Store,
 ) -> Result<crate::models::RemoteSyncResult> {
-    let before = crate::canonical::canonical_digest(paths)?;
-    crate::git::sync_remote(&paths.root)?;
-    if crate::canonical::canonical_digest(paths)? == before {
-        return Ok(Default::default());
-    }
-    Ok(auto_sync_result(paths, store))
+    crate::version_save::push_committed(paths)?;
+    Ok(Default::default())
 }
 
 pub fn save_rule(
@@ -105,11 +90,8 @@ pub fn save_rule(
     create: bool,
 ) -> Result<crate::models::CapabilityMutationResult> {
     let capability = crate::canonical::save_rule(paths, rule, create)?;
-    let auto_sync = if create {
-        Vec::new()
-    } else {
-        run_auto_sync(paths, store)?
-    };
+    let _ = store;
+    let auto_sync = Vec::new();
     Ok(crate::models::CapabilityMutationResult {
         capability,
         auto_sync,
@@ -117,6 +99,12 @@ pub fn save_rule(
 }
 
 pub fn run_auto_sync(paths: &AgentHubPaths, store: &Store) -> Result<Vec<AutoSyncOutcome>> {
+    crate::version_save::project_head(paths, store)
+}
+pub(crate) fn run_auto_sync_snapshot(
+    paths: &AgentHubPaths,
+    store: &Store,
+) -> Result<Vec<AutoSyncOutcome>> {
     let profiles = store.auto_sync_profiles()?;
     if !profiles.iter().any(|p| p.enabled && !p.needs_review) {
         return Ok(Vec::new());
@@ -130,6 +118,10 @@ pub fn run_auto_sync(paths: &AgentHubPaths, store: &Store) -> Result<Vec<AutoSyn
         .into_iter()
         .filter(|profile| profile.enabled && !profile.needs_review)
         .map(|profile| {
+            if profile.selection.mode==crate::models::SyncMode::Replace {
+                let missing=[(crate::models::CapabilityKind::Skill,&profile.selection.skills),(crate::models::CapabilityKind::Mcp,&profile.selection.mcp),(crate::models::CapabilityKind::Plugin,&profile.selection.plugins),(crate::models::CapabilityKind::Rule,&profile.selection.rule_ids)].iter().any(|(kind,selected)|selected.iter().any(|id|!ids.contains(&(*kind,id.clone()))));
+                if missing {return AutoSyncOutcome{target:profile.target,changed:false,transaction_id:None,error:Some("replacement scope contains capabilities absent from saved HEAD; save or review scope first".into()),plan:None};}
+            }
             let mut selection = profile.selection;
             selection.skills_managed = selection.manages_skills();
             selection.mcp_managed = selection.manages_mcp();
@@ -147,22 +139,106 @@ pub fn run_auto_sync(paths: &AgentHubPaths, store: &Store) -> Result<Vec<AutoSyn
             selection
                 .rule_ids
                 .retain(|id| ids.contains(&(crate::models::CapabilityKind::Rule, id.clone())));
-            match sync_once(paths, store, profile.target, Some(&selection)) {
-                Ok(result) => AutoSyncOutcome {
-                    target: profile.target,
-                    changed: result.changed,
-                    transaction_id: result.transaction.map(|transaction| transaction.id),
-                    error: None,
-                },
+            if selection.mode == crate::models::SyncMode::Preserve {
+                selection.skills_managed = !selection.skills.is_empty();
+                selection.mcp_managed = !selection.mcp.is_empty();
+                selection.plugins_managed = !selection.plugins.is_empty();
+                selection.rules_managed = !selection.rule_ids.is_empty();
+            }
+            let result =
+                crate::planner::create_with_selection(paths, profile.target, Some(&selection))
+                    .and_then(|plan| run_reviewed_auto_plan(paths, store, plan));
+            match result {
+                Ok(result) => result,
                 Err(error) => AutoSyncOutcome {
                     target: profile.target,
                     changed: false,
                     transaction_id: None,
                     error: Some(crate::secrets::redact(&format!("{error:#}"))),
+                    plan: None,
                 },
             }
         })
         .collect())
+}
+
+pub(crate) fn check_auto_drift(_paths: &AgentHubPaths, store: &Store, plan: &Plan) -> Result<()> {
+    let key = format!("host_baseline_{}", plan.target.as_str());
+    let baseline: std::collections::BTreeMap<PathBuf, String> = store
+        .meta(&key)?
+        .map(|s| serde_json::from_str(&s))
+        .transpose()?
+        .unwrap_or_default();
+    for step in &plan.steps {
+        anyhow::ensure!(baseline.get(&step.path)==step.current_digest.as_ref(),
+            "host content changed or has no verified projection baseline: {}; review reverse import or a host Plan before overwriting", step.path.display());
+    }
+    Ok(())
+}
+pub(crate) fn run_reviewed_auto_plan(
+    paths: &AgentHubPaths,
+    store: &Store,
+    plan: Plan,
+) -> Result<AutoSyncOutcome> {
+    let target = plan.target;
+    let result = (|| -> Result<Option<String>> {
+        check_auto_drift(paths, store, &plan)?;
+        if plan.steps.is_empty() {
+            return Ok(None);
+        }
+        store.save_plan(&plan)?;
+        Ok(Some(
+            apply_with_mode(paths, store, &plan, TransactionMode::AutoSync)?.id,
+        ))
+    })();
+    Ok(match result {
+        Ok(id) => AutoSyncOutcome {
+            target,
+            changed: id.is_some(),
+            transaction_id: id,
+            error: None,
+            plan: Some(plan),
+        },
+        Err(e) => AutoSyncOutcome {
+            target,
+            changed: false,
+            transaction_id: None,
+            error: Some(crate::secrets::redact(&format!("{e:#}"))),
+            plan: Some(plan),
+        },
+    })
+}
+fn record_baseline(store: &Store, target: Target, domains: &[DomainProjection]) -> Result<()> {
+    let key = format!("host_baseline_{}", target.as_str());
+    let mut baseline: std::collections::BTreeMap<PathBuf, String> = store
+        .meta(&key)?
+        .map(|s| serde_json::from_str(&s))
+        .transpose()?
+        .unwrap_or_default();
+    for d in domains {
+        baseline.retain(|path, _| {
+            if path == &d.target_path {
+                return false;
+            }
+            match path.strip_prefix(&d.target_path) {
+                Ok(rel) => rel.components().next().is_some_and(|name| {
+                    d.preserve_names
+                        .iter()
+                        .any(|p| name.as_os_str() == std::ffi::OsStr::new(p))
+                }),
+                Err(_) => true,
+            }
+        });
+        for (rel, bytes) in crate::adapters::actual_files(d)? {
+            let path = if rel.as_os_str().is_empty() {
+                d.target_path.clone()
+            } else {
+                d.target_path.join(rel)
+            };
+            baseline.insert(path, crate::canonical::sha256(&bytes));
+        }
+    }
+    store.set_meta(&key, &serde_json::to_string(&baseline)?)
 }
 
 pub fn apply_with_mode(
@@ -241,6 +317,18 @@ pub fn apply_with_mode(
             rollback_result?;
             return Err(error);
         }
+    }
+    if let Err(error) = record_baseline(store, plan.target, &domains) {
+        let rollback = restore_manifest(&backup_path, &manifest);
+        tx.status = if rollback.is_ok() {
+            "rolled_back".into()
+        } else {
+            "rollback_failed".into()
+        };
+        tx.verification = Some("projection baseline persistence failed".into());
+        let _ = store.save_transaction(&tx);
+        rollback?;
+        return Err(error);
     }
     Ok(tx)
 }
