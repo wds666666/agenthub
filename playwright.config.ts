@@ -8,7 +8,7 @@ export default defineConfig({
   use: { baseURL: "http://127.0.0.1:1420", trace: "retain-on-failure" },
   projects: [
     { name: "chromium", use: { browserName: "chromium" } },
-    { name: "webkit", use: { browserName: "webkit" } },
+    { name: "webkit", use: { browserName: "webkit", headless: process.env.AGENTHUB_WEBKIT_GTK !== "1" } },
   ],
   webServer: {
     command: "pnpm dev --host 127.0.0.1",

@@ -42,3 +42,5 @@ gh workflow run release.yml --repo wds666666/agenthub \
 HTTPS 认证改动还须执行 `cargo build -p agenthub-cli` 和 `python3 scripts/test_git_auth.py`。它使用临时 TLS 服务与真实 Git 验证登录、双设备合并、上传权限失败、本地提交保留和凭据清除，不访问开发者的真实能力库。
 
 用户明确要求先构建再创建标签时：推送已在本地验证的提交，手动触发 `build.yml`，设置 `platform=all`、`approved_pre_tag=true`。双平台成功后，在同一提交上运行 `release.yml`，显式传入尚未使用的补丁标签与发布授权；流程复用产物并创建标签和发行版。此授权入口不由普通推送自动触发，也不改变默认版本号。
+
+Ubuntu 云端浏览器验证使用 `AGENTHUB_WEBKIT_GTK=1 xvfb-run -a pnpm test:e2e --workers 1`：WebKit 运行 GTK 窗口模式与虚拟显示，覆盖更接近桌面程序的渲染引擎，避免 headless WPE 浏览器进程偶发退出。Chromium 与 WebKit 的所有业务断言仍执行。参考 [Playwright 的 Linux 窗口模式 CI 说明](https://playwright.dev/docs/ci#running-headed)。

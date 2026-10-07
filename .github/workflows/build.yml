@@ -106,12 +106,16 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Verify
+        env:
+          AGENTHUB_WEBKIT_GTK: "1"
         run: |
           set -euo pipefail
           pnpm lint
           pnpm test
           pnpm exec playwright install --with-deps chromium webkit
-          pnpm test:e2e --workers 1
+          # Use WebKitGTK under a virtual display, matching the Ubuntu desktop
+          # engine rather than the intermittently closing headless WPE process.
+          xvfb-run -a pnpm test:e2e --workers 1
           cargo fmt --all -- --check
           cargo clippy -p agenthub-core -p agenthub-cli --all-targets -- -D warnings
           cargo test -p agenthub-core -p agenthub-cli
