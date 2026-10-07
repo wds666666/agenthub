@@ -6,11 +6,16 @@ on:
   workflow_dispatch:
     inputs:
       platform:
-        description: "Rebuild a tested version tag only; never publishes"
+        description: "Platforms to build; never publishes"
         required: true
         type: choice
         options: [all, windows, linux]
         default: all
+      approved_pre_tag:
+        description: "User explicitly approved building this locally tested commit before creating its tag"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -32,10 +37,17 @@ jobs:
         env:
           REF_TYPE: ${{ github.ref_type }}
           RELEASE_TAG: ${{ github.ref_name }}
+          PRE_TAG_APPROVED: ${{ github.event_name == 'workflow_dispatch' && inputs.approved_pre_tag == true }}
         run: |
           set -euo pipefail
-          [[ "$REF_TYPE" == "tag" ]] || { echo 'Package builds require a locally tested version tag.'; exit 1; }
-          python3 scripts/check_project.py --release-tag "$RELEASE_TAG" --github-output
+          if [[ "$REF_TYPE" == "tag" ]]; then
+            python3 scripts/check_project.py --release-tag "$RELEASE_TAG" --github-output
+          elif [[ "$PRE_TAG_APPROVED" == "true" ]]; then
+            python3 scripts/check_project.py --github-output
+          else
+            echo 'Branch package builds require explicit pre-tag approval.'
+            exit 1
+          fi
 
   linux-x64:
     needs: prepare

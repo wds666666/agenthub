@@ -304,6 +304,44 @@ pub fn changes(paths: &AgentHubPaths) -> Result<Vec<CapabilityChange>> {
     let _ = fs::remove_dir_all(stage);
     result
 }
+fn replacement_changes(
+    paths: &AgentHubPaths,
+    stage: &Path,
+    source_commit: &str,
+) -> Result<Vec<CapabilityChange>> {
+    // Git compares the working tree through its clean filters, including
+    // autocrlf and .gitattributes. Raw snapshot hashes still guard the transaction,
+    // but must not turn Windows checkout line endings into capability edits.
+    let changed = git::run(
+        &paths.root,
+        &[
+            "diff",
+            source_commit,
+            "--name-only",
+            "--no-renames",
+            "--no-ext-diff",
+            "--no-textconv",
+            "-z",
+            "--",
+        ],
+    )?;
+    // Include ignored, untracked canonical files as well: replacement removes
+    // those too. The canonical allowlist excludes machine/runtime root paths.
+    let untracked = git::run(&paths.root, &["ls-files", "--others", "-z"])?;
+    let visible = changed
+        .split('\0')
+        .chain(untracked.split('\0'))
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .collect();
+    Ok(group(
+        &files_filtered(&paths.root, Some(&visible))?,
+        &files_filtered(stage, Some(&visible))?,
+        &paths.root,
+        stage,
+    ))
+}
+
 pub fn preview(paths: &AgentHubPaths, action: VersionAction) -> Result<VersionPreview> {
     let _guard = lock(paths)?;
     anyhow::ensure!(
@@ -351,8 +389,8 @@ pub fn preview(paths: &AgentHubPaths, action: VersionAction) -> Result<VersionPr
         let plan = VersionPreview {
             id,
             action,
-            source_commit: sha,
-            changes: group(&files(&paths.root)?, &files(&stage)?, &paths.root, &stage),
+            source_commit: sha.clone(),
+            changes: replacement_changes(paths, &stage, &sha)?,
             git: snap,
             before_digest: before,
             candidate_digest: digest(&stage)?,
@@ -549,4 +587,54 @@ pub fn apply(paths: &AgentHubPaths, id: Uuid, confirmation: &str) -> Result<Vers
         source_commit: plan.source_commit,
         pending_changes: git::snapshot(&paths.root)?.dirty,
     })
+}
+
+#[cfg(test)]
+mod preview_tests {
+    use super::*;
+    #[test]
+    fn remote_snapshot_comparison_only_lists_real_skill_and_mcp_changes() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let hub = crate::AgentHub::open(AgentHubPaths::for_home(temp.path())).unwrap();
+        for id in ["changed", "unchanged"] {
+            fs::create_dir_all(hub.paths.skills.join(id)).unwrap();
+            fs::write(hub.paths.skills.join(id).join("SKILL.md"), "# Original\n").unwrap();
+        }
+        git::commit(
+            &hub.paths.root,
+            "base",
+            Some("Tester"),
+            Some("test@example.com"),
+        )
+        .unwrap();
+        fs::write(hub.paths.skills.join("changed/SKILL.md"), "# Remote edit\n").unwrap();
+        git::commit(
+            &hub.paths.root,
+            "remote",
+            Some("Tester"),
+            Some("test@example.com"),
+        )
+        .unwrap();
+        let remote = git::snapshot(&hub.paths.root).unwrap().head.unwrap();
+        // Keep the local history at the previous commit while retaining the remote object.
+        git::run(&hub.paths.root, &["reset", "--mixed", "HEAD~1"]).unwrap();
+        git::run(&hub.paths.root, &["config", "core.autocrlf", "true"]).unwrap();
+        for id in ["changed", "unchanged"] {
+            fs::write(hub.paths.skills.join(id).join("SKILL.md"), "# Original\r\n").unwrap();
+        }
+        fs::create_dir_all(hub.paths.mcp.join("local-server")).unwrap();
+        fs::write(hub.paths.mcp.join("local-server/server.json"), r#"{"schemaVersion":1,"id":"local-server","display_name":"Server","transport":"stdio","command":"node","args":[],"env":{},"headers":{}}"#).unwrap();
+        git::run(&hub.paths.root, &["add", "mcp"]).unwrap();
+        let stage = hub.paths.root.join("runtime/remote-test");
+        checkout(&hub.paths, &stage, &remote, true).unwrap();
+        let changes = replacement_changes(&hub.paths, &stage, &remote).unwrap();
+        assert_eq!(changes.len(), 2);
+        assert!(changes
+            .iter()
+            .any(|c| c.id == "changed" && c.action == "update"));
+        assert!(changes
+            .iter()
+            .any(|c| c.id == "local-server" && c.action == "delete"));
+        assert!(!changes.iter().any(|c| c.id == "unchanged"));
+    }
 }

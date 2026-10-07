@@ -171,7 +171,9 @@ export function Dialog({
             <X size={19} />
           </button>
         </header>
-        <div className="dialog-body">{children}</div>
+        <div className="dialog-body" onFocusCapture={(event) => {
+          if (event.target instanceof HTMLElement) event.target.scrollIntoView?.({ block: "nearest" });
+        }}>{children}</div>
         <footer>{actions}</footer>
       </section>
     </div>,

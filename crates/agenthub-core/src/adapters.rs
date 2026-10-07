@@ -464,6 +464,11 @@ fn cursor_rules(
     let manifest_path = paths
         .user_home
         .join(".cursor/plugins/local/agenthub-rules/.cursor-plugin/plugin.json");
+    let container = paths.user_home.join(".cursor/plugins/local/agenthub-rules");
+    anyhow::ensure!(
+        !container.exists() || manifest_path.is_file(),
+        "unknown agenthub-rules plugin; refusing to overwrite"
+    );
     if manifest_path.exists() {
         let existing: Value = serde_json::from_slice(&fs::read(&manifest_path)?)
             .context("invalid generated rules container")?;
@@ -496,6 +501,14 @@ fn project_mcp(
     selected: Option<&Vec<String>>,
     preserve: bool,
 ) -> Result<Vec<u8>> {
+    match fs::symlink_metadata(target_path) {
+        Ok(metadata) => anyhow::ensure!(
+            metadata.is_file() && !metadata.file_type().is_symlink(),
+            "host MCP config must be an ordinary file; refusing to overwrite"
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error).context("inspect host MCP config; refusing to overwrite"),
+    }
     let mut servers = Map::new();
     for entry in fs::read_dir(&paths.mcp)? {
         let entry = entry?;

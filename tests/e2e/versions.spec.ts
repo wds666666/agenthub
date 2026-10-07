@@ -54,3 +54,53 @@ for (const width of [1280, 390]) {
     await expect(dialog).toContainText("版本历史、设置和凭据保留");
   });
 }
+
+for (const width of [1280, 390]) {
+  test(`remote recovery keeps long changes scrollable and actions reachable at ${width}`, async ({ page }, info) => {
+    await page.setViewportSize({ width, height: 600 });
+    await page.addInitScript(() => {
+      const changes = Array.from({ length: 40 }, (_, index) => ({ kind: "skill", id: `skill-${index}`, action: "update", files: Array.from({ length: index === 0 ? 544 : 2 }, (_, n) => `skills/skill-${index}/references/file-${n}.md`) }));
+      Object.defineProperty(window, "__TAURI_INTERNALS__", { value: { invoke: async (command: string) => {
+        if (command === "dashboard") return { initialized: true, inventory: { skill: 40 }, enabled_targets: [], auto_sync_targets: [], dirty: true, recent_transactions: [] };
+        if (command === "runtime_diagnostics") return { log_dir: "/fixture/logs", canonical_root: "/hub", git_available: true, platform: "windows" };
+        if (command === "check_skill_changes") return { changes: [], errors: [] };
+        if (command === "git_status") return "## agenthub\n A mcp/server/server.json";
+        if (command === "git_diff") return "";
+        if (command === "git_changes") return [];
+        if (command === "git_identity") return { name: "Fixture", email: "fixture@example.com" };
+        if (command === "git_log") return "abc\t2026-10-07\tSaved library";
+        if (command === "remote_settings") return { url: "https://git.example/library.git", branch: "agenthub", state: "read_verified" };
+        if (command === "version_recovery_plan") return { id: "long-plan", action: "remote", source_commit: "abcdef", changes };
+        if (command === "debug_event") return;
+        throw new Error(`Unexpected IPC ${command}`);
+      } } });
+    });
+    await page.goto("/");
+    await page.getByRole("button", { name: "版本记录", exact: true }).click();
+    await page.getByRole("button", { name: "使用云端内容", exact: true }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByRole("heading", { name: "使用云端内容", exact: true })).toBeVisible();
+    const bounds = await dialog.boundingBox();
+    expect(bounds!.y).toBeGreaterThanOrEqual(0);
+    expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(600);
+    const body = dialog.locator(".dialog-body");
+    expect(await body.evaluate(node => node.scrollHeight > node.clientHeight)).toBe(true);
+    await dialog.locator("summary").first().click();
+    await body.hover();
+    await page.mouse.wheel(0, 500);
+    await expect.poll(() => body.evaluate(node => node.scrollTop)).toBeGreaterThan(0);
+    await dialog.getByLabel("输入确认词 REMOTE").fill("REMOTE");
+    const inputBounds = await dialog.getByLabel("输入确认词 REMOTE").boundingBox();
+    const bodyBounds = await body.boundingBox();
+    expect(inputBounds!.y + inputBounds!.height).toBeLessThanOrEqual(bodyBounds!.y + bodyBounds!.height + 1);
+    await expect(dialog.getByRole("button", { name: "使用云端内容", exact: true })).toBeEnabled();
+    const footer = await dialog.locator("footer").boundingBox();
+    expect(footer!.y + footer!.height).toBeLessThanOrEqual(600);
+    await expect(dialog.getByText("skill-39", { exact: true })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+    await page.screenshot({ path: info.outputPath("long-remote-recovery.png"), animations: "disabled" });
+    await page.keyboard.press("Escape");
+    await expect(dialog).not.toBeVisible();
+    await expect(page.getByRole("button", { name: "使用云端内容", exact: true })).toBeFocused();
+  });
+}

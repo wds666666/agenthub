@@ -39,6 +39,220 @@ fn mcp(hub: &AgentHub) {
     fs::write(hub.paths.mcp.join("server/server.json"),r#"{"schemaVersion":1,"id":"server","display_name":"Server","transport":"stdio","command":"node","args":[],"env":{"MODE":"local"},"headers":{}}"#).unwrap();
 }
 #[test]
+fn cursor_manifest_without_rules_does_not_hide_other_host_resources() {
+    let (_temp, hub) = fixture();
+    let container = hub
+        .paths
+        .user_home
+        .join(".cursor/plugins/local/agenthub-rules");
+    fs::create_dir_all(container.join(".cursor-plugin")).unwrap();
+    fs::write(container.join(".cursor-plugin/plugin.json"),
+        r#"{"name":"agenthub-rules","description":"AgentHub generated global rules","rules":"./rules"}"#).unwrap();
+    skill(
+        &hub.paths.user_home.join(".cursor/skills"),
+        "host-skill",
+        "# Own skill",
+    );
+    fs::write(
+        hub.paths.user_home.join(".cursor/mcp.json"),
+        r#"{"mcpServers":{"host-server":{"command":"node"}}}"#,
+    )
+    .unwrap();
+
+    // Missing and empty generated directories both occur after upgrades or cleanup.
+    for create_rules in [false, true] {
+        if create_rules {
+            fs::create_dir_all(container.join("rules")).unwrap();
+        }
+        let scan = scanner::scan_global(&hub.paths, &Target::ALL).unwrap();
+        assert_eq!(scan.len(), 2);
+        assert!(scan.iter().any(|item| item.kind == CapabilityKind::Skill));
+        assert!(scan.iter().any(|item| item.kind == CapabilityKind::Mcp));
+        let resources = host::inventory(&hub.paths, Target::Cursor).unwrap();
+        assert_eq!(resources.len(), 3);
+        assert!(resources
+            .iter()
+            .any(|item| item.relation == HostResourceRelation::Generated && !item.deletable));
+    }
+    // A wrong file type still fails closed; it must not be treated as empty.
+    fs::remove_dir(container.join("rules")).unwrap();
+    fs::write(container.join("rules"), "unexpected file").unwrap();
+    let items = scanner::scan_global(&hub.paths, &[Target::Cursor]).unwrap();
+    assert!(items
+        .iter()
+        .any(|item| !item.importable && item.warning.as_deref() == Some("comparison_unavailable")));
+    assert!(items
+        .iter()
+        .any(|item| item.kind == CapabilityKind::Skill && item.importable));
+}
+
+#[test]
+fn malformed_host_collections_are_blocked_without_hiding_other_categories() {
+    let (_temp, hub) = fixture();
+    for target in Target::ALL {
+        skill(
+            &hub.paths
+                .user_home
+                .join(format!(".{}/skills", target.as_str())),
+            "healthy",
+            "# Skill",
+        );
+    }
+    fs::write(
+        hub.paths.user_home.join(".cursor/mcp.json"),
+        "{ broken private_token",
+    )
+    .unwrap();
+    fs::write(
+        hub.paths.user_home.join(".codex/config.toml"),
+        "[broken private_token",
+    )
+    .unwrap();
+    fs::write(
+        hub.paths.user_home.join(".codex/AGENTS.md"),
+        "<!-- agenthub:rule broken -->\nmissing end",
+    )
+    .unwrap();
+    fs::write(
+        hub.paths.user_home.join(".claude.json"),
+        "{ broken private_token",
+    )
+    .unwrap();
+    let container = hub
+        .paths
+        .user_home
+        .join(".cursor/plugins/local/agenthub-rules/.cursor-plugin");
+    fs::create_dir_all(&container).unwrap();
+    fs::write(container.join("plugin.json"), "{ broken private_token").unwrap();
+    let mut scan = scanner::scan_global(&hub.paths, &Target::ALL).unwrap();
+    assert_eq!(
+        scan.iter()
+            .filter(|item| item.kind == CapabilityKind::Skill && item.importable)
+            .count(),
+        4
+    );
+    assert_eq!(scan.iter().filter(|item| !item.importable).count(), 5);
+    assert!(!serde_json::to_string(&scan)
+        .unwrap()
+        .contains("private_token"));
+    for target in Target::HOSTS {
+        let resources = host::inventory(&hub.paths, target).unwrap();
+        assert!(resources
+            .iter()
+            .any(|item| item.kind == CapabilityKind::Skill && item.deletable));
+        let unknown = resources
+            .iter()
+            .find(|item| item.relation == HostResourceRelation::Unknown)
+            .unwrap();
+        assert!(!unknown.deletable);
+        assert!(host::cleanup(&hub.paths, target, std::slice::from_ref(&unknown.id)).is_err());
+    }
+    // Even a client bypassing disabled checkboxes cannot import an unknown collection.
+    for item in &mut scan {
+        item.selected = !item.importable;
+    }
+    assert!(canonical::import_scan_items_atomic(&hub.paths, &scan).is_err());
+    mcp(&hub);
+    for target in Target::HOSTS {
+        assert!(planner::create_with_selection(
+            &hub.paths,
+            target,
+            Some(&SyncSelection {
+                mcp: vec!["server".into()],
+                ..Default::default()
+            })
+        )
+        .is_err());
+    }
+}
+
+#[test]
+fn same_named_cursor_user_plugin_is_not_a_generated_rule_container() {
+    let (_temp, hub) = fixture();
+    let container = hub
+        .paths
+        .user_home
+        .join(".cursor/plugins/local/agenthub-rules");
+    fs::create_dir_all(&container).unwrap();
+    fs::write(
+        container.join("plugin.json"),
+        r#"{"name":"agenthub-rules"}"#,
+    )
+    .unwrap();
+    let scan = scanner::scan_global(&hub.paths, &[Target::Cursor]).unwrap();
+    assert_eq!(scan.len(), 1);
+    assert_eq!(scan[0].kind, CapabilityKind::Plugin);
+    assert!(scan[0].importable);
+    assert_eq!(
+        host::inventory(&hub.paths, Target::Cursor).unwrap()[0].relation,
+        HostResourceRelation::HostOnly
+    );
+    rule(&hub, "test-rule", "# Rule");
+    assert!(planner::create_with_selection(
+        &hub.paths,
+        Target::Cursor,
+        Some(&SyncSelection {
+            rule_ids: vec!["test-rule".into()],
+            ..Default::default()
+        })
+    )
+    .is_err());
+    assert!(!container.join("rules").exists());
+}
+
+#[test]
+fn wrong_host_path_types_are_unknown_and_mcp_projection_refuses_them() {
+    let (_temp, hub) = fixture();
+    mcp(&hub);
+    for target in Target::HOSTS {
+        let root = hub.paths.user_home.join(format!(".{}", target.as_str()));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("skills"), "not a directory").unwrap();
+        let config = hub.paths.user_home.join(match target {
+            Target::Cursor => ".cursor/mcp.json",
+            Target::Codex => ".codex/config.toml",
+            _ => ".claude.json",
+        });
+        fs::create_dir_all(&config).unwrap();
+        let resources = host::inventory(&hub.paths, target).unwrap();
+        assert_eq!(resources.len(), 2);
+        assert!(resources
+            .iter()
+            .all(|item| item.relation == HostResourceRelation::Unknown && !item.deletable));
+        assert!(planner::create_with_selection(
+            &hub.paths,
+            target,
+            Some(&SyncSelection {
+                mcp: vec!["server".into()],
+                ..Default::default()
+            })
+        )
+        .is_err());
+        assert!(config.is_dir());
+        assert_eq!(
+            fs::read_to_string(root.join("skills")).unwrap(),
+            "not a directory"
+        );
+    }
+}
+
+#[test]
+fn absent_host_roots_are_empty_and_scanning_never_creates_them() {
+    let (_temp, hub) = fixture();
+    assert!(scanner::scan_global(&hub.paths, &Target::ALL)
+        .unwrap()
+        .is_empty());
+    for target in Target::ALL {
+        assert!(host::inventory(&hub.paths, target).unwrap().is_empty());
+        assert!(!hub
+            .paths
+            .user_home
+            .join(format!(".{}", target.as_str()))
+            .exists());
+    }
+}
+
+#[test]
 fn preserve_and_replace_never_expand_selected_categories() {
     let (_temp, hub) = fixture();
     skill(&hub.paths.skills, "selected", "# Library");

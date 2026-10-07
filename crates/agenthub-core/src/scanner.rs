@@ -34,69 +34,75 @@ pub fn scan_global(paths: &AgentHubPaths, targets: &[Target]) -> Result<Vec<Scan
         if !seen.insert(root.clone()) {
             continue;
         }
-        collect_skills(&root, source, &mut items)?;
+        scan_domain(
+            &root,
+            source,
+            CapabilityKind::Skill,
+            collect_skills,
+            &mut items,
+        );
     }
     if wanted.contains(&Target::Cursor) {
-        collect_mcp_json(
+        scan_domain(
             &paths.user_home.join(".cursor/mcp.json"),
             "cursor",
+            CapabilityKind::Mcp,
+            collect_mcp_json,
             &mut items,
-        )?;
-        collect_plugins(
+        );
+        scan_domain(
             &paths.user_home.join(".cursor/plugins/local"),
             "cursor",
+            CapabilityKind::Plugin,
+            collect_plugins,
             &mut items,
-        )?;
+        );
     }
     if wanted.contains(&Target::Codex) {
-        collect_mcp_toml(
+        scan_domain(
             &paths.user_home.join(".codex/config.toml"),
             "codex",
+            CapabilityKind::Mcp,
+            collect_mcp_toml,
             &mut items,
-        )?;
-        collect_plugins(&paths.user_home.join(".codex/plugins"), "codex", &mut items)?;
-        let p = paths.user_home.join(".codex/AGENTS.md");
-        if p.is_file() {
-            let body = fs::read_to_string(&p)?;
-            let blocks = crate::rule_projection::blocks(&body)?;
-            if blocks.is_empty() {
-                let mut rule = rule_item("codex", p)?;
-                if body.starts_with("# AgentHub managed global rules\n") {
-                    rule.importable = false;
-                    rule.warning = Some("legacy_generated_rules".into());
-                }
-                items.push(rule);
-            } else {
-                for (id, _, _) in blocks {
-                    let mut rule = rule_item("codex", p.clone())?;
-                    rule.source_key = Some(format!("rule:{id}"));
-                    rule.id = sha256(format!("{}:{id}", rule.id).as_bytes());
-                    items.push(rule);
-                }
-                let mut remainder = body;
-                for (_, _, range) in crate::rule_projection::blocks(&remainder)?
-                    .into_iter()
-                    .rev()
-                {
-                    remainder.replace_range(range, "");
-                }
-                if !remainder.trim().is_empty() {
-                    let mut rule = rule_item("codex", p)?;
-                    rule.importable = false;
-                    rule.warning = Some("combined_rule_user_text".into());
-                    items.push(rule);
-                }
-            }
-        }
+        );
+        scan_domain(
+            &paths.user_home.join(".codex/plugins"),
+            "codex",
+            CapabilityKind::Plugin,
+            collect_plugins,
+            &mut items,
+        );
+        scan_domain(
+            &paths.user_home.join(".codex/AGENTS.md"),
+            "codex",
+            CapabilityKind::Rule,
+            collect_codex_rules,
+            &mut items,
+        );
     }
     if wanted.contains(&Target::Claude) {
-        collect_mcp_json(&paths.user_home.join(".claude.json"), "claude", &mut items)?;
-        collect_plugins(
+        scan_domain(
+            &paths.user_home.join(".claude.json"),
+            "claude",
+            CapabilityKind::Mcp,
+            collect_mcp_json,
+            &mut items,
+        );
+        scan_domain(
             &paths.user_home.join(".claude/plugins"),
             "claude",
+            CapabilityKind::Plugin,
+            collect_plugins,
             &mut items,
-        )?;
-        collect_markdown(&paths.user_home.join(".claude/rules"), "claude", &mut items)?;
+        );
+        scan_domain(
+            &paths.user_home.join(".claude/rules"),
+            "claude",
+            CapabilityKind::Rule,
+            collect_markdown,
+            &mut items,
+        );
     }
     items.sort_by(|a, b| {
         (&a.source, a.kind, a.path.as_os_str()).cmp(&(&b.source, b.kind, b.path.as_os_str()))
@@ -105,8 +111,98 @@ pub fn scan_global(paths: &AgentHubPaths, targets: &[Target]) -> Result<Vec<Scan
     Ok(items)
 }
 
+// Read-only discovery isolates failures by capability domain. The blocked row
+// prevents an unreadable collection from being mistaken for an empty one.
+fn scan_domain(
+    path: &Path,
+    source: &str,
+    kind: CapabilityKind,
+    collect: fn(&Path, &str, &mut Vec<ScanItem>) -> Result<()>,
+    out: &mut Vec<ScanItem>,
+) {
+    let start = out.len();
+    if collect(path, source, out).is_err() {
+        out.truncate(start);
+        out.push(unavailable_item(path, source, kind));
+    }
+}
+
+fn unavailable_item(path: &Path, source: &str, kind: CapabilityKind) -> ScanItem {
+    let digest = sha256(b"unavailable");
+    ScanItem {
+        id: sha256(format!("unavailable:{source}:{}:{}", kind.as_str(), path.display()).as_bytes()),
+        comparison_digest: String::new(),
+        kind,
+        source: source.into(),
+        path: path.to_owned(),
+        digest,
+        selected: false,
+        importable: false,
+        source_key: None,
+        warning: Some("comparison_unavailable".into()),
+        // Do not expose parser excerpts that may contain credentials.
+        warning_detail: None,
+    }
+}
+
+fn collect_codex_rules(p: &Path, _source: &str, out: &mut Vec<ScanItem>) -> Result<()> {
+    if optional_path(p, false)? {
+        let body = fs::read_to_string(p)?;
+        let blocks = crate::rule_projection::blocks(&body)?;
+        if blocks.is_empty() {
+            let mut rule = rule_item("codex", p.to_owned())?;
+            if body.starts_with("# AgentHub managed global rules\n") {
+                rule.importable = false;
+                rule.warning = Some("legacy_generated_rules".into());
+            }
+            out.push(rule);
+        } else {
+            for (id, _, _) in blocks {
+                let mut rule = rule_item("codex", p.to_owned())?;
+                rule.source_key = Some(format!("rule:{id}"));
+                rule.id = sha256(format!("{}:{id}", rule.id).as_bytes());
+                out.push(rule);
+            }
+            let mut remainder = body;
+            for (_, _, range) in crate::rule_projection::blocks(&remainder)?
+                .into_iter()
+                .rev()
+            {
+                remainder.replace_range(range, "");
+            }
+            if !remainder.trim().is_empty() {
+                let mut rule = rule_item("codex", p.to_owned())?;
+                rule.importable = false;
+                rule.warning = Some("combined_rule_user_text".into());
+                out.push(rule);
+            }
+        }
+    }
+    Ok(())
+}
+
+// Only absence is empty. Permission failures and incorrect file types remain
+// visible as blocked domains instead of silently reporting no resources.
+fn optional_path(path: &Path, directory: bool) -> Result<bool> {
+    match fs::metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error.into()),
+        Ok(metadata) => {
+            anyhow::ensure!(
+                if directory {
+                    metadata.is_dir()
+                } else {
+                    metadata.is_file()
+                },
+                "unexpected host resource file type"
+            );
+            Ok(true)
+        }
+    }
+}
+
 fn collect_skills(root: &Path, source: &str, out: &mut Vec<ScanItem>) -> Result<()> {
-    if !root.is_dir() {
+    if !optional_path(root, true)? {
         return Ok(());
     }
     for e in WalkDir::new(root)
@@ -132,7 +228,7 @@ fn collect_skills(root: &Path, source: &str, out: &mut Vec<ScanItem>) -> Result<
     Ok(())
 }
 fn collect_plugins(root: &Path, source: &str, out: &mut Vec<ScanItem>) -> Result<()> {
-    if !root.is_dir() {
+    if !optional_path(root, true)? {
         return Ok(());
     }
     for e in fs::read_dir(root)? {
@@ -152,18 +248,31 @@ fn collect_plugins(root: &Path, source: &str, out: &mut Vec<ScanItem>) -> Result
         let recognized = path.join("plugin.json").is_file()
             || path.join(".cursor-plugin/plugin.json").is_file()
             || path.join(".claude-plugin/plugin.json").is_file();
-        if recognized && source == "cursor" && name == "agenthub-rules" {
+        if source == "cursor"
+            && name == "agenthub-rules"
+            && path.join(".cursor-plugin/plugin.json").is_file()
+        {
             let manifest: serde_json::Value =
                 serde_json::from_slice(&fs::read(path.join(".cursor-plugin/plugin.json"))?)?;
-            anyhow::ensure!(
-                manifest.get("description").and_then(|v| v.as_str())
-                    == Some("AgentHub generated global rules"),
-                "unknown agenthub-rules container; review before scanning"
-            );
-            for rule in WalkDir::new(path.join("rules"))
-                .max_depth(1)
-                .follow_links(false)
+            if manifest.get("description").and_then(|v| v.as_str())
+                != Some("AgentHub generated global rules")
             {
+                out.push(item(CapabilityKind::Plugin, source, path, None)?);
+                continue;
+            }
+            let rules = path.join("rules");
+            // Old installations may retain only the generated manifest. An absent
+            // optional rules directory is empty, not a failure of the entire scan.
+            match fs::symlink_metadata(&rules) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error.into()),
+                Ok(metadata) => anyhow::ensure!(
+                    metadata.is_dir() && !metadata.file_type().is_symlink(),
+                    "generated rules path must be an ordinary directory: {}",
+                    rules.display()
+                ),
+            }
+            for rule in WalkDir::new(rules).max_depth(1).follow_links(false) {
                 let rule = rule?;
                 if rule.file_type().is_file() && rule.path().extension().is_some_and(|v| v == "mdc")
                 {
@@ -179,7 +288,7 @@ fn collect_plugins(root: &Path, source: &str, out: &mut Vec<ScanItem>) -> Result
     Ok(())
 }
 fn collect_markdown(root: &Path, source: &str, out: &mut Vec<ScanItem>) -> Result<()> {
-    if !root.is_dir() {
+    if !optional_path(root, true)? {
         return Ok(());
     }
     for e in WalkDir::new(root).max_depth(4).follow_links(false) {
@@ -191,7 +300,7 @@ fn collect_markdown(root: &Path, source: &str, out: &mut Vec<ScanItem>) -> Resul
     Ok(())
 }
 fn collect_mcp_json(path: &Path, source: &str, out: &mut Vec<ScanItem>) -> Result<()> {
-    if !path.is_file() {
+    if !optional_path(path, false)? {
         return Ok(());
     }
     let value: serde_json::Value = serde_json::from_slice(&fs::read(path)?)?;
@@ -208,7 +317,7 @@ fn collect_mcp_json(path: &Path, source: &str, out: &mut Vec<ScanItem>) -> Resul
     Ok(())
 }
 fn collect_mcp_toml(path: &Path, source: &str, out: &mut Vec<ScanItem>) -> Result<()> {
-    if !path.is_file() {
+    if !optional_path(path, false)? {
         return Ok(());
     }
     let value: toml::Value = fs::read_to_string(path)?.parse()?;

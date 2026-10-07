@@ -76,8 +76,15 @@ pub fn inventory(paths: &AgentHubPaths, target: Target) -> Result<Vec<HostResour
         let path = paths.user_home.join(".cursor/plugins/local/agenthub-rules");
         let manifest = path.join(".cursor-plugin/plugin.json");
         if manifest.is_file() {
-            let value: serde_json::Value = serde_json::from_slice(&fs::read(&manifest)?)?;
-            if value.get("description").and_then(|v| v.as_str())
+            // Scanner already reports invalid/unreadable containers as blocked
+            // resources. Do not fail the complete inventory by reading them again.
+            let value = fs::read(&manifest)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+            if value
+                .as_ref()
+                .and_then(|v| v.get("description"))
+                .and_then(|v| v.as_str())
                 == Some("AgentHub generated global rules")
             {
                 out.push(HostResource {

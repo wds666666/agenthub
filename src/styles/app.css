@@ -547,18 +547,18 @@ code, pre { font-family: var(--mono); font-variant-ligatures: none; }
 .security-note p { margin: 4px 0 0; color: var(--ink-secondary); font-size: 10px; }
 
 .dialog-backdrop { position: fixed; z-index: 100; inset: 0; display: grid; place-items: center; padding: 20px; background: rgba(9, 12, 18, 0.4); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); animation: fade-in 180ms ease both; }
-.dialog { width: min(100%, 490px); overflow: hidden; background: var(--material-raised); border: 1px solid rgba(255, 255, 255, 0.23); border-radius: 23px; box-shadow: var(--shadow-float); animation: dialog-in 300ms var(--ease-out) both; }
-.dialog--wide { width: min(100%, 790px); max-height: min(880px, calc(100vh - 40px)); display: flex; flex-direction: column; }
+.dialog { width: min(100%, 490px); max-height: min(880px, calc(100dvh - 40px)); display: flex; flex-direction: column; overflow: hidden; background: var(--material-raised); border: 1px solid rgba(255, 255, 255, 0.23); border-radius: 23px; box-shadow: var(--shadow-float); animation: dialog-in 300ms var(--ease-out) both; }
+.dialog--wide { width: min(100%, 790px); }
 @keyframes fade-in { from { opacity: 0; } }
 @keyframes dialog-in { from { opacity: 0; transform: translateY(12px) scale(0.96); } }
-.dialog > header { display: flex; align-items: center; justify-content: space-between; padding: 19px 20px 12px 24px; }
+.dialog > header { flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; padding: 19px 20px 12px 24px; }
 .dialog h2 { margin: 0; font-size: 18px; letter-spacing: -0.025em; }
 .icon-button { display: grid; place-items: center; width: 34px; height: 34px; color: var(--ink-secondary); background: var(--material-inset); border: 0; border-radius: 50%; cursor: pointer; transition: transform 90ms var(--ease-press), background 160ms ease; }
 .icon-button:hover { background: color-mix(in srgb, var(--ink) 10%, transparent); }
 .icon-button:active { transform: scale(0.9); }
-.dialog-body { padding: 5px 24px 21px; overflow: auto; color: var(--ink-secondary); font-size: 13px; line-height: 1.6; }
+.dialog-body { min-height: 0; padding: 5px 24px 21px; overflow: auto; overscroll-behavior: contain; color: var(--ink-secondary); font-size: 13px; line-height: 1.6; }
 .dialog-code { display: block; margin-top: 14px; padding: 10px; overflow: hidden; color: var(--ink); font-size: 10px; text-overflow: ellipsis; background: var(--material-inset); border-radius: 9px; }
-.dialog footer { display: flex; justify-content: flex-end; gap: 9px; padding: 14px 18px 18px; border-top: 1px solid var(--line); }
+.dialog footer { flex-shrink: 0; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 9px; padding: 14px 18px 18px; border-top: 1px solid var(--line); }
 
 .rule-form { display: grid; gap: 18px; }
 .form-intro { display: flex; align-items: center; gap: 9px; padding: 11px 13px; color: var(--ink-secondary); font-size: 10px; background: var(--blue-soft); border: 1px solid color-mix(in srgb, var(--blue) 15%, transparent); border-radius: 11px; }
@@ -774,7 +774,7 @@ code, pre { font-family: var(--mono); font-variant-ligatures: none; }
   .scan-list label { grid-template-columns: 22px 1fr auto; }
   .scan-list label > code { display: none; }
   .dialog-backdrop { padding: 12px; }
-  .dialog--wide { max-height: calc(100vh - 24px); border-radius: 19px; }
+  .dialog { max-height: calc(100dvh - 24px); border-radius: 19px; }
   .form-grid, .target-checks { grid-template-columns: 1fr; }
   .segmented-control { grid-template-columns: 1fr; }
   .commit-form-row { grid-template-columns: 1fr; }

@@ -212,7 +212,7 @@ pub fn annotate(paths: &AgentHubPaths, items: &mut [ScanItem]) -> Result<()> {
         }
         item.comparison_digest = match scan_digest(item) {
             Ok(digest) => digest,
-            Err(error) if item.kind == CapabilityKind::Skill => {
+            Err(error) if item.kind == CapabilityKind::Skill && item.selected => {
                 return Err(error)
                     .context("import skill from selected source: portable validation failed");
             }
@@ -224,7 +224,14 @@ pub fn annotate(paths: &AgentHubPaths, items: &mut [ScanItem]) -> Result<()> {
         };
         if item.kind == CapabilityKind::Mcp {
             let target: Option<Target> = item.source.parse().ok();
-            let host = mcp_value(&read_mcp(item)?, target)?;
+            let host = match read_mcp(item).and_then(|value| mcp_value(&value, target)) {
+                Ok(host) => host,
+                Err(_) => {
+                    item.importable = false;
+                    item.warning = Some("comparison_unavailable".into());
+                    continue;
+                }
+            };
             if host["extra"]
                 .as_object()
                 .is_some_and(|extra| !extra.is_empty())

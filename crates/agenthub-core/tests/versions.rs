@@ -57,6 +57,69 @@ fn clean_crlf_worktree_is_not_reported_as_a_capability_change() {
     );
 }
 #[test]
+fn recovery_preview_ignores_clean_crlf_skills_but_lists_staged_mcp_and_ignored_files() {
+    let (_temp, hub) = fixture();
+    command(&hub, &["config", "core.autocrlf", "true"]);
+    fs::write(hub.paths.skills.join("one/SKILL.md"), "# Original\r\n").unwrap();
+    for id in [
+        "chrome-devtools",
+        "context7",
+        "esp-component-registry",
+        "espressif-docs",
+        "node_repl",
+    ] {
+        fs::create_dir_all(hub.paths.mcp.join(id)).unwrap();
+        fs::write(hub.paths.mcp.join(id).join("server.json"), format!(r#"{{"schemaVersion":1,"id":"{id}","display_name":"{id}","transport":"stdio","command":"node","args":[],"env":{{}},"headers":{{}}}}"#)).unwrap();
+    }
+    command(&hub, &["add", "mcp"]);
+    let plan = versions::preview(&hub.paths, VersionAction::Discard).unwrap();
+    assert_eq!(plan.changes.len(), 5);
+    assert!(plan.changes.iter().all(|change| change.kind
+        == Some(agenthub_core::models::CapabilityKind::Mcp)
+        && change.action == "delete"));
+    // Actual edits remain visible even alongside unchanged CRLF files.
+    fs::write(hub.paths.skills.join("one/script.py"), "print('new')\r\n").unwrap();
+    fs::write(hub.paths.skills.join("one/.gitignore"), "local.txt\n").unwrap();
+    fs::write(hub.paths.skills.join("one/local.txt"), "local content\n").unwrap();
+    let plan = versions::preview(&hub.paths, VersionAction::Discard).unwrap();
+    let skill = plan
+        .changes
+        .iter()
+        .find(|change| change.id == "one")
+        .unwrap();
+    assert_eq!(skill.files.len(), 3);
+    assert!(!skill.files.iter().any(|path| path.ends_with("SKILL.md")));
+    assert!(skill.files.iter().any(|path| path.ends_with("local.txt")));
+}
+
+#[test]
+fn recovery_preview_respects_binary_git_attributes_and_keeps_raw_stale_checks() {
+    let (_temp, hub) = fixture();
+    command(&hub, &["config", "core.autocrlf", "true"]);
+    fs::write(
+        hub.paths.skills.join("one/.gitattributes"),
+        "asset.bin -text\n",
+    )
+    .unwrap();
+    fs::write(hub.paths.skills.join("one/asset.bin"), b"binary\0\n").unwrap();
+    git::commit(
+        &hub.paths.root,
+        "binary",
+        Some("Tester"),
+        Some("test@example.com"),
+    )
+    .unwrap();
+    fs::write(hub.paths.skills.join("one/SKILL.md"), "# Original\r\n").unwrap();
+    fs::write(hub.paths.skills.join("one/asset.bin"), b"binary\0\r\n").unwrap();
+    let plan = versions::preview(&hub.paths, VersionAction::Discard).unwrap();
+    assert_eq!(plan.changes.len(), 1);
+    assert_eq!(plan.changes[0].files, ["skills/one/asset.bin"]);
+    fs::write(hub.paths.skills.join("one/SKILL.md"), "# Original\n").unwrap();
+    // Even an equivalent line-ending-only concurrent edit invalidates Apply.
+    assert!(versions::apply(&hub.paths, plan.id, "DISCARD").is_err());
+}
+
+#[test]
 fn capability_changes_include_staged_unstaged_new_and_deleted_files() {
     let (_temp, hub) = fixture();
     fs::write(hub.paths.skills.join("one/SKILL.md"), "# Staged\n").unwrap();

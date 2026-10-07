@@ -55,3 +55,5 @@ Discovery uses a shared comparison digest of portable capability content, separa
 The synchronization mode picker reuses native radio semantics with text consequences. Saved profiles requiring upgrade review display an inline warning; mode changes invalidate the visible Plan. Settings controls the default for new scopes only. Rules use the same per-capability picker as Skills and MCP.
 
 Versions exposes Refresh, Discard unsaved changes, and Use remote content as distinct actions. Capability names/categories/actions/counts precede raw file details. Destructive dialogs list the exact affected capabilities and candidate version; confirmation requires typing DISCARD or REMOTE. Pending requests disable double submission and dismissal, failed requests retain the preview, and success reports the private recovery path. Remote replacement retains local version history and requires a later explicit save; neither recovery action writes tools.
+
+All modal variants constrain height to the viewport, keep the header/actions visible, and scroll long content inside the shared body. Version recovery uses the wide dialog; file lists remain collapsed until individually expanded.
