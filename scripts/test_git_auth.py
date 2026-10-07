@@ -91,7 +91,7 @@ def main():
             outputs.append(result.stdout + result.stderr)
             assert (result.returncode == 0) == success, f'{args}: {result.stderr}'
             assert token not in outputs[-1] and authorization not in outputs[-1]
-            return json.loads(result.stdout) if result.stdout.lstrip().startswith('{') else result.stdout
+            return json.loads(result.stdout) if result.stdout.lstrip().startswith(('{', '[')) else result.stdout
 
         try:
             root = temporary / 'library'
@@ -137,7 +137,7 @@ def main():
             (skill2 / 'SKILL.md').write_text('# Two\n')
             run(second, 'git', 'commit', '-m', 'second', '--name', 'Tester', '--email', 'test@example.com')
             run(second, 'git', 'login', url, '--branch', 'agenthub', '--username', 'tester', secret=token)
-            # Receiving updates uses this device's explicit scope, never all library items.
+            # Remote updates never project hosts, even with an enabled local profile.
             profile = {'target': 'agents', 'enabled': True, 'needs_review': False,
                        'selection': {'mode': 'preserve', 'skills_managed': True, 'skills': ['one'],
                                      'plugins': [], 'mcp': [], 'rule_ids': []}}
@@ -149,8 +149,11 @@ def main():
             own.mkdir(parents=True)
             (own / 'SKILL.md').write_text('# Host only\n')
             received = run(second, 'git', 'sync')
-            assert len(received['auto_sync']) == 1 and not received['auto_sync_error']
+            assert received['auto_sync'] == [] and not received['auto_sync_error']
             assert (second / 'skills/one/SKILL.md').exists()
+            assert not (host_skills / 'one').exists()
+            projected = run(second, 'auto-sync', 'run')
+            assert len(projected) == 1 and not projected[0].get('error')
             assert (host_skills / 'one/SKILL.md').read_text() == '# One\n'
             assert not (host_skills / 'two').exists()
             assert (own / 'SKILL.md').read_text() == '# Host only\n'
@@ -275,7 +278,7 @@ def main():
             run(restored, 'git', 'commit', '-m', 'unchanged', '--name', 'Tester', '--email', 'test@example.com', success=False)
             (restored / 'skills/three').mkdir()
             (restored / 'skills/three/SKILL.md').write_text('# Three restored device update\n')
-            result = run(restored, 'git', 'commit', '-m', 'restored device save')
+            result = run(restored, 'git', 'commit', '-m', 'restored device save', '--name', 'Tester', '--email', 'test@example.com')
             # SQLite reconstruction loses credentials, as expected; sign in again.
             assert result['local_saved'] and not result['remote_synced']
             run(restored, 'git', 'login', url, '--branch', 'agenthub', '--username', 'tester', secret=token)
@@ -283,7 +286,7 @@ def main():
             # A push permission failure must preserve a newly saved local version.
             mode['read_only'] = True
             (root / 'skills/one/SKILL.md').write_text('# One updated\n')
-            result = run(root, 'git', 'commit', '-m', 'local preserved')
+            result = run(root, 'git', 'commit', '-m', 'local preserved', '--push')
             assert result['local_saved'] and not result['remote_synced'] and result['remote_error']
             assert run(root, 'git', 'remote-status')['state'] == 'auth_failed'
             assert (root / 'skills/two/SKILL.md').exists()

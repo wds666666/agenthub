@@ -645,9 +645,16 @@ fn push_to(paths: &AgentHubPaths, url: &str, branch: &str) -> Result<PushResult>
     let stage = paths.root.join(format!("runtime/push-{}", Uuid::new_v4()));
     let result = (|| {
         versions::checkout(paths, &stage, &before, false)?;
-        let (name, email) = identity(&paths.root, None, None)?;
-        git::run(&stage, &["config", "user.name", &name])?;
-        git::run(&stage, &["config", "user.email", &email])?;
+        // Fast-forwarding or pushing existing commits does not create a version
+        // and must work on a freshly restored device without a local author.
+        // Git still requires an actual configured identity for a merge commit.
+        let author = git::identity(&paths.root)?;
+        if let Some(name) = author.name.filter(|value| !value.trim().is_empty()) {
+            git::run(&stage, &["config", "user.name", &name])?;
+        }
+        if let Some(email) = author.email.filter(|value| !value.trim().is_empty()) {
+            git::run(&stage, &["config", "user.email", &email])?;
+        }
         for attempt in 0..2 {
             let remote_ref = format!("refs/heads/{branch}");
             let remote = git::run_authenticated(
