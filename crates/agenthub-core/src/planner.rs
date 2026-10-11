@@ -105,12 +105,19 @@ pub fn create_with_selection(
             target != Target::Cursor || !scope.plugins.iter().any(|id| id == "agenthub-rules"),
             "agenthub-rules is a generated Rules container; select individual Rules"
         );
+        let mut kinds = std::collections::BTreeSet::new();
+        for kind in &scope.all_kinds {
+            anyhow::ensure!(kinds.insert(*kind), "duplicate all-category scope");
+            anyhow::ensure!(*kind != CapabilityKind::Plugin || target == Target::Cursor,
+                "dynamic Plugins scope is supported only for Cursor; other plugin stores are protected");
+        }
         let caps = inventory(paths)?;
+        let resolved = scope.resolved(&caps);
         for (kind, ids) in [
-            (CapabilityKind::Skill, &scope.skills),
-            (CapabilityKind::Mcp, &scope.mcp),
-            (CapabilityKind::Plugin, &scope.plugins),
-            (CapabilityKind::Rule, &scope.rule_ids),
+            (CapabilityKind::Skill, &resolved.skills),
+            (CapabilityKind::Mcp, &resolved.mcp),
+            (CapabilityKind::Plugin, &resolved.plugins),
+            (CapabilityKind::Rule, &resolved.rule_ids),
         ] {
             let mut seen = std::collections::BTreeSet::new();
             for id in ids {

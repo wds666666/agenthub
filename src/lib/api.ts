@@ -7,9 +7,9 @@ export interface VersionResult { backup_path: string; source_commit: string; pen
 export interface Capability { comparison_digest?: string; duplicate_of?: string; id: string; kind: Kind; display_name: string; digest: string; path: string; compatible_targets: Target[] }
 export interface CapabilityDetail { capability: Capability; preview_path: string; preview: string; preview_truncated: boolean; files: Array<{ path: string; size: number }> }
 export type TransactionMode = "reviewed" | "auto_sync" | "default_sync" | "rollback";
-export interface Transaction { id: string; plan_id: string; target: Target; status: string; mode: TransactionMode; backup_path: string; verification?: string; created_at: string }
+export interface Transaction { trigger?: string; source_state?: string; resource_changes?: Array<{kind: Kind; id: string; action: string; paths: string[]}>; id: string; plan_id: string; target: Target; status: string; mode: TransactionMode; backup_path: string; verification?: string; created_at: string }
 export interface SyncRunResult { changed: boolean; plan: Plan; transaction?: Transaction }
-export interface Dashboard { initialized: boolean; inventory: Record<string, number>; enabled_targets: Target[]; auto_sync_targets: Target[]; dirty: boolean; recent_transactions: Transaction[] }
+export interface Dashboard { auto_sync_errors?: string[]; initialized: boolean; inventory: Record<string, number>; enabled_targets: Target[]; auto_sync_targets: Target[]; dirty: boolean; recent_transactions: Transaction[] }
 export interface ScanItem { comparison_digest?: string; id: string; kind: Kind; source: string; path: string; digest: string; selected: boolean; importable: boolean; source_key?: string; warning?: string; warning_detail?: string }
 export interface SkillChange { canonical_id: string; item: ScanItem }
 export interface SkillChangeReport { changes: SkillChange[]; errors: string[] }
@@ -19,7 +19,7 @@ export interface HostCleanupResult { id: string; deleted: string[]; backup_path:
 export interface RuntimeDiagnostics { log_dir: string; canonical_root: string; git_available: boolean; platform: string }
 export interface PlanStep { action: string; capability_kind?: Kind; capability_id?: string; path: string; detail: string }
 export interface PlanCapabilitySummary { kind: Kind; affected: number; create: number; update: number; delete: number; skip: number; files: number }
-export interface SyncSelection { mode?: "preserve" | "replace"; rule_ids?: string[]; skills_managed: boolean; skills: string[]; plugins_managed: boolean; plugins: string[]; mcp_managed: boolean; mcp: string[]; rules_managed: boolean; rules: boolean; authoritative: boolean }
+export interface SyncSelection { all_kinds?: Kind[]; sync_on_change?: boolean; mode?: "preserve" | "replace"; rule_ids?: string[]; skills_managed: boolean; skills: string[]; plugins_managed: boolean; plugins: string[]; mcp_managed: boolean; mcp: string[]; rules_managed: boolean; rules: boolean; authoritative: boolean }
 export interface AutoSyncProfile { needs_review?: boolean; target: Target; enabled: boolean; selection: SyncSelection }
 export interface AutoSyncOutcome { target: Target; changed: boolean; transaction_id?: string; error?: string }
 export interface AutoSyncUpdateResult { profile: AutoSyncProfile; initial_sync?: SyncRunResult }
@@ -64,6 +64,7 @@ export const api = {
   setTarget: (target: Target, enabled: boolean) => call<void>("set_target", { target, enabled }),
   plan: (target: Target, selection?: SyncSelection) => call<Plan>("create_plan", { target, selection }),
   apply: (planId: string) => call<Transaction>("apply_plan", { planId }),
+  autoSyncErrors: () => call<string[]>("auto_sync_errors"),
   autoSyncProfiles: () => call<AutoSyncProfile[]>("auto_sync_profiles"),
   policySettings: () => call<PolicySettings>("policy_settings"),
   setPolicySettings: (settings: PolicySettings) => call<PolicySettings>("set_policy_settings", { settings }),
@@ -93,4 +94,14 @@ export const api = {
     if (!isTauri()) { console.debug(`[AgentHub] ${event}`, context ?? ""); return Promise.resolve(); }
     return invoke<void>("debug_event", { event, context });
   },
+};
+
+export interface BackgroundSettings { close_behavior: "ask" | "exit" | "tray"; check_seconds: number; sync_seconds: number; paused: boolean }
+export interface BackgroundStatus { paused?: boolean; running: boolean; pending: boolean; last_success?: string; next_sync?: string; error?: string; manager_error?: string; tray_available: boolean; watcher_available: boolean }
+export const backgroundApi = {
+  settings: () => call<BackgroundSettings>("background_settings"),
+  save: (settings: BackgroundSettings) => call<BackgroundSettings>("set_background_settings", { settings }),
+  status: () => call<BackgroundStatus>("background_status"),
+  refresh: () => call<void>("background_refresh"),
+  close: (behavior: "exit" | "tray", remember: boolean) => call<void>("close_choice", { behavior, remember }),
 };

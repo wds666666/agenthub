@@ -37,7 +37,7 @@ for (const width of [1280, 390]) {
     const dialog = page.getByRole("dialog");
     const choose = dialog.getByRole("button", { name: "选择 Skill 文件夹" });
     const apply = dialog.getByRole("button", { name: "导入到 AgentHub" });
-    await expect(dialog).toContainText("不自动保存版本、推送或同步到工具");
+    await expect(dialog).toContainText("不自动保存版本或推送");
     await expect(apply).toBeDisabled();
     await choose.click();
     await expect(apply).toBeDisabled();

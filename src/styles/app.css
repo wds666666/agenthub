@@ -874,3 +874,16 @@ code, pre { font-family: var(--mono); font-variant-ligatures: none; }
 
 .version-selection { display: flex; align-items: center; gap: 8px; padding: 8px 0; font-size: 13px; }
 .version-selection input { flex-shrink: 0; }
+
+/* The immediate-delivery control reuses the existing scope checkbox layout. */
+.sync-immediate { min-height: 64px; padding: 12px; margin: 0 18px 12px; }
+.sync-immediate strong { font-size: 12px; white-space: normal; }
+.sync-immediate small { font-family: inherit; font-size: 11px; line-height: 1.55; white-space: normal; }
+.sync-immediate:has(input:focus-visible) { outline: 2px solid var(--blue); outline-offset: 3px; }
+
+.background-panel { margin-bottom: 22px; }
+.background-panel h2 { display: flex; align-items: center; gap: 8px; }
+.background-check { display: flex; align-items: center; gap: 10px; min-height: 44px; }
+.background-check input { accent-color: var(--blue); width: 18px; height: 18px; }
+.background-panel select { width: 100%; min-height: 44px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--material-inset); color: var(--ink); font: inherit; }
+.background-panel select:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }

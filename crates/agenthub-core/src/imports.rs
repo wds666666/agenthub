@@ -121,7 +121,9 @@ pub fn apply_local_skill(
     Ok(ScanImportResult {
         skipped_duplicates: usize::from(imported.is_empty()),
         imported,
-        auto_sync: Vec::new(),
+        auto_sync: crate::transaction::with_trigger("import", || {
+            crate::transaction::run_auto_sync_on_change(paths, store)
+        })?,
     })
 }
 pub fn preview(paths: &AgentHubPaths, store: &Store, ids: &[String]) -> Result<ImportPreview> {
@@ -194,7 +196,9 @@ pub fn apply(
     Ok(ScanImportResult {
         skipped_duplicates: plan.items.len().saturating_sub(imported.len()),
         imported,
-        auto_sync: Vec::new(),
+        auto_sync: crate::transaction::with_trigger("import", || {
+            crate::transaction::run_auto_sync_on_change(paths, store)
+        })?,
     })
 }
 #[cfg(test)]

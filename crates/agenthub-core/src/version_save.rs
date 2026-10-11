@@ -363,37 +363,23 @@ pub fn preview(
     result
 }
 fn selected_scope(selection: &SyncSelection, changes: &[CapabilityChange]) -> SyncSelection {
-    let has = |kind, id: &String| {
+    let ids = |kind, selected: &Vec<String>| {
         changes
             .iter()
-            .any(|c| c.kind == Some(kind) && c.id == *id && c.action != "delete")
+            .filter(|c| {
+                c.kind == Some(kind)
+                    && c.action != "delete"
+                    && (selection.includes_all(kind) || selected.contains(&c.id))
+            })
+            .map(|c| c.id.clone())
+            .collect()
     };
     SyncSelection {
         mode: SyncMode::Preserve,
-        skills: selection
-            .skills
-            .iter()
-            .filter(|id| has(CapabilityKind::Skill, id))
-            .cloned()
-            .collect(),
-        mcp: selection
-            .mcp
-            .iter()
-            .filter(|id| has(CapabilityKind::Mcp, id))
-            .cloned()
-            .collect(),
-        plugins: selection
-            .plugins
-            .iter()
-            .filter(|id| has(CapabilityKind::Plugin, id))
-            .cloned()
-            .collect(),
-        rule_ids: selection
-            .rule_ids
-            .iter()
-            .filter(|id| has(CapabilityKind::Rule, id))
-            .cloned()
-            .collect(),
+        skills: ids(CapabilityKind::Skill, &selection.skills),
+        mcp: ids(CapabilityKind::Mcp, &selection.mcp),
+        plugins: ids(CapabilityKind::Plugin, &selection.plugins),
+        rule_ids: ids(CapabilityKind::Rule, &selection.rule_ids),
         ..Default::default()
     }
 }
@@ -607,7 +593,11 @@ pub fn apply(
             committed.backups = paths.backups.clone();
             let host = host_plans(&committed, store, &plan.changes, &plan.options.host_sync)?;
             host.into_iter()
-                .map(|p| transaction::run_reviewed_auto_plan(&committed, store, p))
+                .map(|p| {
+                    transaction::with_trigger("saved_version", || {
+                        transaction::run_reviewed_auto_plan(&committed, store, p)
+                    })
+                })
                 .collect()
         })();
         match projected {
@@ -1015,6 +1005,7 @@ mod concurrency_tests {
                 enabled: true,
                 needs_review: false,
                 selection: SyncSelection {
+                    all_kinds: vec![CapabilityKind::Skill, CapabilityKind::Mcp],
                     mcp: vec!["pending".into()],
                     ..scope
                 },

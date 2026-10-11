@@ -789,3 +789,265 @@ fn import_rejects_changed_source_and_reports_existing_duplicates_without_deletin
     );
     assert!(hub.paths.skills.join("second/SKILL.md").exists());
 }
+
+#[test]
+fn all_category_scope_is_dynamic_preserves_extras_and_rejects_stale_plans() {
+    for target in Target::ALL {
+        let (_temp, hub) = fixture();
+        skill(&hub.paths.skills, "one", "# One");
+        let scope = SyncSelection {
+            all_kinds: vec![CapabilityKind::Skill],
+            ..Default::default()
+        };
+        let old = planner::create_with_selection(&hub.paths, target, Some(&scope)).unwrap();
+        assert_eq!(old.selection, Some(scope.clone()));
+        skill(&hub.paths.skills, "two", "# Two");
+        assert!(transaction::apply(&hub.paths, &hub.store, &old).is_err());
+        let host = hub
+            .paths
+            .user_home
+            .join(format!(".{}/skills", target.as_str()));
+        skill(&host, "host-only", "# Keep");
+        transaction::sync_once(&hub.paths, &hub.store, target, Some(&scope)).unwrap();
+        assert!(host.join("one/SKILL.md").exists());
+        assert!(host.join("two/SKILL.md").exists());
+        assert!(host.join("host-only/SKILL.md").exists());
+        hub.store
+            .set_auto_sync_profile(&AutoSyncProfile {
+                target,
+                enabled: true,
+                needs_review: false,
+                selection: scope.clone(),
+            })
+            .unwrap();
+        skill(&hub.paths.skills, "future", "# Future");
+        assert!(transaction::run_auto_sync_on_change(&hub.paths, &hub.store)
+            .unwrap()
+            .is_empty());
+        assert!(!host.join("future").exists());
+        let immediate = SyncSelection {
+            sync_on_change: true,
+            ..scope
+        };
+        hub.store
+            .set_auto_sync_profile(&AutoSyncProfile {
+                target,
+                enabled: true,
+                needs_review: false,
+                selection: immediate.clone(),
+            })
+            .unwrap();
+        let result = transaction::run_auto_sync_on_change(&hub.paths, &hub.store).unwrap();
+        assert!(result[0].changed && result[0].error.is_none());
+        assert!(host.join("future/SKILL.md").exists());
+        assert_eq!(
+            hub.store
+                .auto_sync_profiles()
+                .unwrap()
+                .into_iter()
+                .find(|p| p.target == target)
+                .unwrap()
+                .selection,
+            immediate
+        );
+        // Host-side edits are never silently overwritten, including all-mode.
+        fs::write(host.join("future/SKILL.md"), "# Host edit").unwrap();
+        skill(&hub.paths.skills, "future", "# Library edit");
+        let result = transaction::run_auto_sync_on_change(&hub.paths, &hub.store).unwrap();
+        assert!(result[0].error.is_some());
+        assert_eq!(
+            fs::read_to_string(host.join("future/SKILL.md")).unwrap(),
+            "# Host edit"
+        );
+    }
+}
+
+#[test]
+fn immediate_import_includes_future_skill_only_with_explicit_all_scope() {
+    for all in [false, true] {
+        let (temp, hub) = fixture();
+        hub.store.set_initialized(true).unwrap();
+        skill(&hub.paths.skills, "one", "# Existing");
+        let scope = SyncSelection {
+            all_kinds: if all {
+                vec![CapabilityKind::Skill]
+            } else {
+                vec![]
+            },
+            sync_on_change: true,
+            skills: vec!["one".into()],
+            ..Default::default()
+        };
+        transaction::sync_once(&hub.paths, &hub.store, Target::Codex, Some(&scope)).unwrap();
+        hub.store
+            .set_auto_sync_profile(&AutoSyncProfile {
+                target: Target::Codex,
+                enabled: true,
+                needs_review: false,
+                selection: scope,
+            })
+            .unwrap();
+        skill(temp.path(), "incoming", "# Incoming");
+        let p = agenthub_core::imports::preview_local_skill(
+            &hub.paths,
+            &hub.store,
+            &temp.path().join("incoming"),
+        )
+        .unwrap();
+        let result =
+            agenthub_core::imports::apply_local_skill(&hub.paths, &hub.store, p.id, true).unwrap();
+        assert_eq!(result.imported.len(), 1);
+        assert_eq!(
+            hub.paths
+                .user_home
+                .join(".codex/skills/incoming/SKILL.md")
+                .exists(),
+            all
+        );
+        assert!(!hub.paths.user_home.join(".codex/config.toml").exists());
+        assert!(agenthub_core::git::snapshot(&hub.paths.root)
+            .unwrap()
+            .head
+            .is_none());
+    }
+}
+
+#[test]
+fn all_mcp_and_rules_follow_new_content_and_rules_edit_before_commit() {
+    for target in Target::HOSTS {
+        let (_temp, hub) = fixture();
+        let scope = SyncSelection {
+            all_kinds: vec![CapabilityKind::Mcp, CapabilityKind::Rule],
+            sync_on_change: true,
+            ..Default::default()
+        };
+        transaction::sync_once(&hub.paths, &hub.store, target, Some(&scope)).unwrap();
+        hub.store
+            .set_auto_sync_profile(&AutoSyncProfile {
+                target,
+                enabled: true,
+                needs_review: false,
+                selection: scope,
+            })
+            .unwrap();
+        mcp(&hub);
+        rule(&hub, "future", "New rule");
+        let result = transaction::run_auto_sync_on_change(&hub.paths, &hub.store).unwrap();
+        assert!(
+            result[0].changed && result[0].error.is_none(),
+            "{:?}",
+            result
+        );
+        let found = scanner::scan_global(&hub.paths, &[target]).unwrap();
+        assert!(found.iter().any(|item| item.kind == CapabilityKind::Mcp
+            && canonical::inventory(&hub.paths)
+                .unwrap()
+                .iter()
+                .any(|c| c.kind == item.kind && c.comparison_digest == item.comparison_digest)));
+        let mut doc = canonical::read_rule(&hub.paths, "future").unwrap();
+        doc.body = "Edited rule".into();
+        let result = transaction::save_rule(&hub.paths, &hub.store, &doc, false).unwrap();
+        assert!(result.auto_sync[0].changed && result.auto_sync[0].error.is_none());
+        assert!(!hub
+            .paths
+            .user_home
+            .join(format!(".{}/skills", target.as_str()))
+            .exists());
+    }
+}
+
+#[test]
+fn empty_dynamic_preserve_is_noop_replace_is_reviewed_clear_and_legacy_stays_fixed() {
+    let (_temp, hub) = fixture();
+    skill(
+        &hub.paths.user_home.join(".agents/skills"),
+        "extra",
+        "# Extra",
+    );
+    let scope = SyncSelection {
+        all_kinds: vec![CapabilityKind::Skill],
+        ..Default::default()
+    };
+    let preserve =
+        planner::create_with_selection(&hub.paths, Target::Agents, Some(&scope)).unwrap();
+    assert!(preserve.steps.is_empty());
+    let replace = planner::create_with_selection(
+        &hub.paths,
+        Target::Agents,
+        Some(&SyncSelection {
+            mode: SyncMode::Replace,
+            ..scope
+        }),
+    )
+    .unwrap();
+    assert!(!replace.steps.is_empty());
+    assert!(replace
+        .steps
+        .iter()
+        .all(|s| s.action == agenthub_core::models::PlanAction::Delete));
+    let old: SyncSelection =
+        serde_json::from_str(r#"{"skills_managed":true,"skills":["fixed"]}"#).unwrap();
+    assert!(old.all_kinds.is_empty() && !old.sync_on_change);
+    for (target, kinds) in [
+        (Target::Agents, vec![CapabilityKind::Mcp]),
+        (Target::Codex, vec![CapabilityKind::Plugin]),
+        (Target::Claude, vec![CapabilityKind::Plugin]),
+        (
+            Target::Cursor,
+            vec![CapabilityKind::Skill, CapabilityKind::Skill],
+        ),
+    ] {
+        assert!(planner::create_with_selection(
+            &hub.paths,
+            target,
+            Some(&SyncSelection {
+                all_kinds: kinds,
+                ..Default::default()
+            })
+        )
+        .is_err());
+    }
+}
+
+#[test]
+fn replace_all_future_mcp_and_skills_keep_reviewed_baseline() {
+    for target in Target::HOSTS {
+        let (_temp, hub) = fixture();
+        let scope = SyncSelection {
+            all_kinds: vec![CapabilityKind::Skill, CapabilityKind::Mcp],
+            mode: SyncMode::Replace,
+            sync_on_change: true,
+            ..Default::default()
+        };
+        // Empty MCP is already equal: enabling must still record the verified baseline.
+        transaction::sync_once(&hub.paths, &hub.store, target, Some(&scope)).unwrap();
+        assert!(
+            !transaction::sync_once(&hub.paths, &hub.store, target, Some(&scope))
+                .unwrap()
+                .changed
+        );
+        hub.store
+            .set_auto_sync_profile(&AutoSyncProfile {
+                target,
+                enabled: true,
+                needs_review: false,
+                selection: scope,
+            })
+            .unwrap();
+        skill(&hub.paths.skills, "new", "# New");
+        mcp(&hub);
+        let outcomes = transaction::run_auto_sync_on_change(&hub.paths, &hub.store).unwrap();
+        assert!(
+            outcomes[0].changed && outcomes[0].error.is_none(),
+            "{outcomes:?}"
+        );
+        let tx = hub.store.recent_transactions(1).unwrap().remove(0);
+        transaction::rollback(&hub.paths, &hub.store, &tx.id).unwrap();
+        assert!(!hub
+            .paths
+            .user_home
+            .join(format!(".{}/skills/new", target.as_str()))
+            .exists());
+        assert!(hub.paths.skills.join("new").exists());
+    }
+}

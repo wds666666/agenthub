@@ -51,6 +51,9 @@ pub fn projection_with_selection(
     if selection.is_none() {
         return projection_with_selection(paths, target, Some(&full_selection(paths, target)?));
     }
+    let caps = inventory(paths)?;
+    let resolved = selection.map(|scope| scope.resolved(&caps));
+    let selection = resolved.as_ref();
     if let Some(scope) = selection {
         let prefix = format!(".{}", target.as_str());
         let mut roots = Vec::new();
@@ -96,7 +99,6 @@ pub fn projection_with_selection(
             }
         }
     }
-    let caps = inventory(paths)?;
     let preserve = selection.is_none_or(|s| s.mode == SyncMode::Preserve);
     anyhow::ensure!(
         selection.is_none_or(|s| !s.authoritative),

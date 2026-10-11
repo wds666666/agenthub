@@ -122,7 +122,11 @@ enum TargetCommand {
 #[derive(Subcommand)]
 enum AutoSyncCommand {
     Status,
-    Run,
+    Run {
+        /// Explicitly deliver unsaved local content instead of committed HEAD.
+        #[arg(long)]
+        include_pending: bool,
+    },
     /// Enable only the exact previously reviewed host Plan; may write tool files.
     Enable {
         target: TargetArg,
@@ -372,32 +376,6 @@ fn main() -> Result<()> {
             json: _,
         } => {
             let scope = selection.map(read_selection).transpose()?;
-            if let Some(scope) = &scope {
-                let inventory = canonical::inventory(&hub.paths)?;
-                for (kind, ids) in [
-                    (CapabilityKind::Skill, &scope.skills),
-                    (CapabilityKind::Mcp, &scope.mcp),
-                    (CapabilityKind::Plugin, &scope.plugins),
-                    (CapabilityKind::Rule, &scope.rule_ids),
-                ] {
-                    let mut seen = std::collections::BTreeSet::new();
-                    for id in ids {
-                        anyhow::ensure!(
-                            seen.insert(id)
-                                && inventory.iter().any(|c| c.kind == kind && c.id == *id),
-                            "unknown or duplicate {} selection: {id}",
-                            kind.as_str()
-                        );
-                    }
-                }
-                anyhow::ensure!(
-                    target.0 != Target::Agents
-                        || !(scope.manages_mcp()
-                            || scope.manages_plugins()
-                            || scope.manages_rules()),
-                    "shared Agents supports only Skills"
-                );
-            }
             let p = planner::create_with_selection(&hub.paths, target.0, scope.as_ref())?;
             hub.store.save_plan(&p)?;
             println!("{}", serde_json::to_string_pretty(&p)?);
@@ -418,7 +396,7 @@ fn main() -> Result<()> {
                 "{}",
                 serde_json::to_string_pretty(&hub.store.auto_sync_profiles()?)?
             ),
-            AutoSyncCommand::Run => print_auto_sync(&hub)?,
+            AutoSyncCommand::Run { include_pending } => print_auto_sync(&hub, include_pending)?,
             AutoSyncCommand::Enable {
                 target,
                 plan_id,
@@ -441,7 +419,9 @@ fn main() -> Result<()> {
                         || selection.manages_rules(),
                     "select at least one managed category"
                 );
-                let tx = transaction::apply(&hub.paths, &hub.store, &plan)?;
+                let tx = transaction::with_trigger("initial_enable", || {
+                    transaction::apply(&hub.paths, &hub.store, &plan)
+                })?;
                 let profile = agenthub_core::models::AutoSyncProfile {
                     target: target.0,
                     enabled: true,
@@ -638,6 +618,8 @@ fn read_selection(path: PathBuf) -> Result<SyncSelection> {
         anyhow::ensure!(
             [
                 "mode",
+                "all_kinds",
+                "sync_on_change",
                 "rule_ids",
                 "skills_managed",
                 "skills",
@@ -663,8 +645,12 @@ fn parse_targets(value: &str) -> Result<Vec<Target>> {
     }
 }
 
-fn print_auto_sync(hub: &AgentHub) -> Result<()> {
-    let outcomes = transaction::run_auto_sync(&hub.paths, &hub.store)?;
+fn print_auto_sync(hub: &AgentHub, include_pending: bool) -> Result<()> {
+    let outcomes = if include_pending {
+        transaction::run_auto_sync_pending(&hub.paths, &hub.store)?
+    } else {
+        transaction::run_auto_sync(&hub.paths, &hub.store)?
+    };
     println!("{}", serde_json::to_string_pretty(&outcomes)?);
     anyhow::ensure!(
         outcomes.iter().all(|outcome| outcome.error.is_none()),
@@ -722,4 +708,51 @@ fn save_command(hub: &AgentHub, args: SaveArgs, preview_only: bool) -> Result<()
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod dynamic_scope_tests {
+    use super::*;
+    #[test]
+    fn selection_accepts_dynamic_scope_but_rejects_unknown_fields_and_kinds() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let file = temp.path().join("scope.json");
+        std::fs::write(
+            &file,
+            r#"{"mode":"preserve","all_kinds":["skill","mcp"],"sync_on_change":true}"#,
+        )
+        .unwrap();
+        let scope = read_selection(file.clone()).unwrap();
+        assert_eq!(
+            scope.all_kinds,
+            vec![CapabilityKind::Skill, CapabilityKind::Mcp]
+        );
+        assert!(scope.sync_on_change);
+        for invalid in [r#"{"all_kinds":["skills"]}"#, r#"{"all_categories":true}"#] {
+            std::fs::write(&file, invalid).unwrap();
+            assert!(read_selection(file.clone()).is_err());
+        }
+    }
+    #[test]
+    fn pending_projection_is_an_explicit_cli_option() {
+        let default = Cli::try_parse_from(["agenthub", "auto-sync", "run"]).unwrap();
+        assert!(matches!(
+            default.command,
+            Command::AutoSync {
+                command: AutoSyncCommand::Run {
+                    include_pending: false
+                }
+            }
+        ));
+        let pending =
+            Cli::try_parse_from(["agenthub", "auto-sync", "run", "--include-pending"]).unwrap();
+        assert!(matches!(
+            pending.command,
+            Command::AutoSync {
+                command: AutoSyncCommand::Run {
+                    include_pending: true
+                }
+            }
+        ));
+    }
 }

@@ -47,7 +47,7 @@ impl SkillContent {
     }
 }
 
-fn is_runtime(entry: &DirEntry) -> bool {
+pub(crate) fn is_runtime(entry: &DirEntry) -> bool {
     if entry.depth() == 0 {
         return false;
     }

@@ -16,6 +16,65 @@ fn fixture() -> (TempDir, AgentHub) {
     let hub = AgentHub::open(paths).unwrap();
     (temp, hub)
 }
+
+#[test]
+fn reopening_existing_library_never_repopulates_manually_cleared_shared_skills() {
+    use agenthub_core::models::AutoSyncProfile;
+    let (_temp, hub) = fixture();
+    let ids: Vec<_> = (0..24).map(|index| format!("existing-{index}")).collect();
+    for id in &ids {
+        let root = hub.paths.skills.join(id);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("SKILL.md"), format!("# {id}\n")).unwrap();
+    }
+    git::commit(
+        &hub.paths.root,
+        "Existing library",
+        Some("Fixture"),
+        Some("fixture@example.com"),
+    )
+    .unwrap();
+    let selection = SyncSelection {
+        skills_managed: true,
+        skills: ids,
+        ..Default::default()
+    };
+    transaction::sync_once(&hub.paths, &hub.store, Target::Agents, Some(&selection)).unwrap();
+    hub.store
+        .set_auto_sync_profile(&AutoSyncProfile {
+            target: Target::Agents,
+            enabled: true,
+            needs_review: false,
+            selection,
+        })
+        .unwrap();
+    let shared = hub.paths.user_home.join(".agents/skills");
+    assert_eq!(fs::read_dir(&shared).unwrap().count(), 24);
+    fs::remove_dir_all(&shared).unwrap();
+    fs::create_dir_all(&shared).unwrap();
+    let records = hub.store.recent_transactions(100).unwrap().len();
+    let paths = hub.paths.clone();
+    drop(hub);
+    for _ in 0..3 {
+        let reopened = AgentHub::open(paths.clone()).unwrap();
+        assert_eq!(canonical::inventory(&paths).unwrap().len(), 24);
+        assert!(reopened
+            .store
+            .auto_sync_profiles()
+            .unwrap()
+            .iter()
+            .any(|profile| profile.target == Target::Agents && profile.enabled));
+        let mut cache = agenthub_core::skill_changes::SkillChangeCache::new();
+        cache.check(&paths, true).unwrap();
+        scanner::scan_global(&paths, &Target::ALL).unwrap();
+        assert!(host::inventory(&paths, Target::Agents).unwrap().is_empty());
+        assert_eq!(fs::read_dir(&shared).unwrap().count(), 0);
+        assert_eq!(
+            reopened.store.recent_transactions(100).unwrap().len(),
+            records
+        );
+    }
+}
 fn seed(hub: &AgentHub) {
     let skill = hub.paths.skills.join("review");
     fs::create_dir_all(&skill).unwrap();
@@ -986,6 +1045,9 @@ fn legacy_applied_transaction_enables_missing_target_on_reopen() {
     let (temp, hub) = fixture();
     hub.store
         .save_transaction(&Transaction {
+            trigger: None,
+            source_state: None,
+            resource_changes: vec![],
             id: "legacy-transaction".into(),
             plan_id: "legacy-plan".into(),
             target: Target::Claude,

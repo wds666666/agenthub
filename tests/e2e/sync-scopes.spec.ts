@@ -80,3 +80,57 @@ for (const width of [1280, 390]) {
     await expect(dialog.getByRole("button", { name: "导入所选", exact: true })).toBeDisabled();
   });
 }
+
+for (const width of [1280, 390]) {
+  test(`all-category scope includes future additions and survives search at ${width}`, async ({ page }, info) => {
+    await page.setViewportSize({ width, height: 844 });
+    await page.addInitScript(() => {
+      let next = false;
+      let profile: unknown;
+      const state = { saved: null as unknown };
+      Object.defineProperty(window, "fixtureAllScope", { value: state });
+      Object.defineProperty(window, "__TAURI_INTERNALS__", { value: { invoke: async (command: string, args: Record<string, unknown>) => {
+        if (command === "dashboard") return { initialized: true, inventory: { skill: 2 }, enabled_targets: [], auto_sync_targets: [], dirty: true, recent_transactions: [] };
+        if (command === "runtime_diagnostics") return { log_dir: "/fixture/logs", canonical_root: "/hub", git_available: true, platform: "linux" };
+        if (command === "check_skill_changes") return { changes: [], errors: [] };
+        if (command === "inventory") return (next ? ["one", "two", "future"] : ["one", "two"]).map((id) => ({ id, kind: "skill", display_name: id, path: `/hub/skills/${id}`, digest: id, compatible_targets: ["codex"] }));
+        if (command === "policy_settings") return { sync_mode: "preserve" };
+        if (command === "auto_sync_profiles") return profile ? [profile] : [{ target: "codex", enabled: false, selection: { skills_managed: true, skills: ["one"], plugins: [], mcp: [], rule_ids: [] } }];
+        if (command === "set_auto_sync") {
+          state.saved = args.selection;
+          profile = { target: "codex", enabled: true, needs_review: false, selection: args.selection };
+          next = true;
+          return { profile, initial_sync: { changed: false } };
+        }
+        if (command === "debug_event") return;
+        throw new Error(`Unexpected IPC ${command}`);
+      } } });
+    });
+    await page.goto("/");
+    await page.getByRole("button", { name: "同步到工具", exact: true }).click();
+    const skills = page.locator("details").filter({ has: page.locator("summary", { hasText: "Skills" }) });
+    const all = skills.getByRole("checkbox", { name: /同步本类全部能力/ });
+    await all.check();
+    await expect(skills.getByRole("checkbox", { name: "two two", exact: true })).toBeChecked();
+    await expect(skills.getByRole("checkbox", { name: "two two", exact: true })).toBeDisabled();
+    await all.uncheck();
+    await expect(skills.getByRole("checkbox", { name: "one one", exact: true })).toBeChecked();
+    await expect(skills.getByRole("checkbox", { name: "two two", exact: true })).not.toBeChecked();
+    await all.check();
+    await page.getByRole("checkbox", { name: /导入或编辑后(?:立即|自动)同步/ }).check();
+    await page.getByRole("textbox", { name: "搜索能力" }).fill("one");
+    await expect(skills.locator("summary")).toContainText("2 / 2");
+    await page.getByRole("button", { name: "开启自动同步", exact: true }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByText(/含以后新增/)).toBeVisible();
+    await dialog.getByRole("button", { name: "同步当前范围并开启", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => (window as unknown as { fixtureAllScope: { saved: unknown } }).fixtureAllScope.saved)).toMatchObject({ all_kinds: ["skill"], sync_on_change: true, skills: ["one"] });
+    await page.getByRole("button", { name: "我的能力库", exact: true }).click();
+    await page.getByRole("button", { name: "同步到工具", exact: true }).click();
+    const refreshed = page.locator("details").filter({ has: page.locator("summary", { hasText: "Skills" }) });
+    await expect(refreshed.getByRole("checkbox", { name: "future future", exact: true })).toBeChecked();
+    await expect(refreshed.locator("summary")).toContainText("3 / 3");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+    await page.screenshot({ path: info.outputPath("all-category.png"), fullPage: true, animations: "disabled" });
+  });
+}

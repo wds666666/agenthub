@@ -1,3 +1,5 @@
+import { listen } from "@tauri-apps/api/event";
+import { BackgroundPanel, DesktopControls } from "./components/BackgroundControls";
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type FormEvent, type SetStateAction, type WheelEvent } from "react";
 import {
   Activity,
@@ -70,6 +72,8 @@ const kindMeta: Array<{ id: Kind; icon: Icon; accent: string }> = [
 ];
 
 const fullSelection = (items: Capability[], authoritative = false, target: Target = "codex"): SyncSelection => ({
+  all_kinds: [],
+  sync_on_change: true,
   skills_managed: true,
   skills: items.filter((item) => item.kind === "skill").map((item) => item.id),
   plugins_managed: target === "cursor",
@@ -82,10 +86,12 @@ const fullSelection = (items: Capability[], authoritative = false, target: Targe
   mode: authoritative ? "replace" : "preserve",
   rule_ids: target === "agents" ? [] : items.filter((item) => item.kind === "rule").map((item) => item.id),
 });
-const hasSelection = (selection: SyncSelection) => selection.skills_managed || selection.plugins_managed || selection.mcp_managed || selection.rules_managed || selection.skills.length + selection.plugins.length + selection.mcp.length + (selection.rule_ids?.length ?? 0) > 0;
+const hasSelection = (selection: SyncSelection) => Boolean(selection.all_kinds?.length) || selection.skills_managed || selection.plugins_managed || selection.mcp_managed || selection.rules_managed || selection.skills.length + selection.plugins.length + selection.mcp.length + (selection.rule_ids?.length ?? 0) > 0;
 const sameIds = (left: string[], right: string[]) => JSON.stringify([...left].sort()) === JSON.stringify([...right].sort());
 const sameSelection = (left?: SyncSelection | null, right?: SyncSelection | null) => Boolean(left && right
   && (left.mode ?? "preserve") === (right.mode ?? "preserve")
+  && sameIds(left.all_kinds ?? [], right.all_kinds ?? [])
+  && Boolean(left.sync_on_change) === Boolean(right.sync_on_change)
   && sameIds(left.rule_ids ?? [], right.rule_ids ?? [])
   && left.rules === right.rules
   && left.rules_managed === right.rules_managed
@@ -96,6 +102,11 @@ const sameSelection = (left?: SyncSelection | null, right?: SyncSelection | null
   && sameIds(left.skills, right.skills)
   && sameIds(left.plugins, right.plugins)
   && sameIds(left.mcp, right.mcp));
+
+const scopeIds = (scope: SyncSelection, kind: Kind, inventory: Capability[]) => scope.all_kinds?.includes(kind)
+  ? inventory.filter((item) => item.kind === kind).map((item) => item.id)
+  : scope[kind === "skill" ? "skills" : kind === "plugin" ? "plugins" : kind === "rule" ? "rule_ids" : "mcp"] ?? [];
+const scopeCount = (scope: SyncSelection, inventory: Capability[]) => (["skill", "mcp", "plugin", "rule"] as Kind[]).reduce((count, kind) => count + scopeIds(scope, kind, inventory).length, 0);
 
 const handoffBoundaryWheel = (event: WheelEvent<HTMLElement>) => {
   const node = event.currentTarget;
@@ -133,7 +144,7 @@ function transactionMode(mode: Transaction["mode"]) {
   return t(`transactions.${mode === "auto_sync" || mode === "default_sync" ? "modeAuto" : mode === "rollback" ? "modeRollback" : "modeReviewed"}`);
 }
 
-export default function App() {
+function AppContent() {
   const [resetRecovery, setResetRecovery] = useState("");
   const [page, setPage] = useState<Page>("overview");
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
@@ -141,6 +152,7 @@ export default function App() {
   const [error, setError] = useState("");
   const [repairing, setRepairing] = useState(false);
   const [toast, setToast] = useState("");
+  const [autoSyncErrors, setAutoSyncErrors] = useState<string[] | null>(null);
   const skillChanges = useSkillChanges(Boolean(dashboard?.initialized), page);
 
   const refresh = useCallback(() => {
@@ -149,6 +161,21 @@ export default function App() {
   }, []);
 
   useEffect(refresh, [refresh]);
+  // Refresh local delivery status while immediate profiles can run in the background.
+  const backgroundSync = Boolean(dashboard?.auto_sync_targets?.length);
+  useEffect(() => {
+    if (!backgroundSync) { setAutoSyncErrors(null); return; }
+    const update = () => { if (!document.hidden) void api.autoSyncErrors().then(setAutoSyncErrors).catch(() => undefined); };
+    const timer = window.setInterval(update, 15_000);
+    window.addEventListener("focus", update);
+    return () => { window.clearInterval(timer); window.removeEventListener("focus", update); };
+  }, [backgroundSync]);
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    let disposed=false; let unlisten: (() => void) | undefined;
+    void listen("background-updated", () => { void api.autoSyncErrors().then(setAutoSyncErrors).catch(() => undefined); }).then((fn) => { if (disposed) fn(); else unlisten=fn; }).catch(() => undefined);
+    return () => { disposed=true; unlisten?.(); };
+  }, []);
   useEffect(() => { api.runtimeDiagnostics().then(setDiagnostics).catch(() => undefined); }, []);
   useEffect(() => { document.title = `${t(`nav.${page}`)} · AgentHub`; }, [page]);
   useEffect(() => {
@@ -234,6 +261,7 @@ export default function App() {
         </div>
       </aside>
       <main id="main" className="main-stage">
+        {!!(autoSyncErrors ?? dashboard.auto_sync_errors)?.length && <div className="inline-error" role="alert"><AlertTriangle size={18} /><span>{t("sync.backgroundFailed")}<br />{(autoSyncErrors ?? dashboard.auto_sync_errors)?.join(" · ")}</span></div>}
         <div className="page-stage" key={page}>{content}</div>
       </main>
       {toast && <Toast message={toast} />}
@@ -492,7 +520,7 @@ function Inventory({ onChanged, onNotify, skillChanges }: { onChanged: () => voi
       {editor && <RuleEditor key={`${editor.create ? "new" : "edit"}-${editor.document.id}`} initial={editor.document} create={editor.create} imported={editor.imported} onClose={() => setEditor(null)} onSaved={saved} />}
       {localSkillOpen && <LocalSkillImportDialog onClose={() => setLocalSkillOpen(false)} onImported={(result) => {
         setLocalSkillOpen(false); loadInventory(); onChanged();
-        onNotify(`${result.imported.length} ${t("inventory.scanImported")} · ${result.skipped_duplicates} ${t("inventory.scanSkipped")}`);
+        onNotify(`${result.imported.length} ${t("inventory.scanImported")} · ${result.skipped_duplicates} ${t("inventory.scanSkipped")}${result.auto_sync.some((outcome) => outcome.error) ? ` · ${t("inventory.scanAutoFailed")}` : ""}`);
       }} />}
       {detail && <CapabilityDetailDialog detail={detail} onClose={() => setDetail(null)} onDelete={() => setDeleteCandidate(detail.capability)} onEditRule={detail.capability.kind === "rule" ? () => { const id = detail.capability.id; setDetail(null); void editRule(id); } : undefined} />}
       <Dialog open={batchCandidate !== null} onClose={() => !deleting && setBatchCandidate(null)} title={t("inventory.batchTitle")} actions={<><Button variant="secondary" disabled={deleting} onClick={() => setBatchCandidate(null)}>{t("common.cancel")}</Button><Button variant="danger" disabled={deleting} onClick={() => void removeBatch()}>{deleting ? <RefreshCw className="spin" size={16} /> : <Trash2 size={16} />}{t("inventory.deleteSelected")} ({batchCandidate?.length ?? 0})</Button></>}>
@@ -757,8 +785,8 @@ function Sync({ onApplied, onNotify }: { onApplied: () => void; onNotify: (messa
   const autoEnabled = Boolean(currentProfile?.enabled);
   const scopeChanged = autoEnabled && !sameSelection(selection, currentProfile?.selection);
   const selectionItems = useMemo(() => inventory.filter((item) => `${item.id} ${item.display_name}`.toLowerCase().includes(selectionQuery.toLowerCase())), [inventory, selectionQuery]);
-  const selectedCount = selection ? selection.skills.length + selection.plugins.length + selection.mcp.length + (selection.rule_ids?.length ?? 0) : 0;
-  const profileSelectionCount = (profile?: AutoSyncProfile) => profile ? profile.selection.skills.length + profile.selection.plugins.length + profile.selection.mcp.length + (profile.selection.rule_ids?.length ?? 0) : 0;
+  const selectedCount = selection ? scopeCount(selection, inventory) : 0;
+  const profileSelectionCount = (profile?: AutoSyncProfile) => profile ? scopeCount(profile.selection, inventory) : 0;
   const visibleKinds: Array<Kind> = target === "agents" ? ["skill"] : ["skill", "plugin", "mcp", "rule"];
   const toggleCapability = (item: Capability) => {
     if (!selection) return;
@@ -819,8 +847,8 @@ function Sync({ onApplied, onNotify }: { onApplied: () => void; onNotify: (messa
       setProfiles((current) => [...current.filter((profile) => profile.target !== target), result.profile]);
       setConfirm(null);
       setPlan(null);
+      onApplied();
       if (result.initial_sync?.changed) {
-        onApplied();
         onNotify(t("toast.autoEnabledSynced"));
       } else if (enabled) {
         onNotify(t("toast.autoEnabled"));
@@ -865,9 +893,10 @@ function Sync({ onApplied, onNotify }: { onApplied: () => void; onNotify: (messa
           <div className="sync-selection__toolbar">
             <SearchField value={selectionQuery} onChange={setSelectionQuery} />
             <Button variant="quiet" disabled={!selection} onClick={() => { setSelection({ ...fullSelection(inventory, false, target), mode: selection?.mode ?? "preserve" }); setPlan(null); }}>{t("sync.selectAll")}</Button>
-            <Button variant="quiet" disabled={!selection} onClick={() => { setPlan(null); if (selection) setSelection({ ...selection, skills_managed: true, skills: [], plugins_managed: target === "cursor", plugins: [], mcp_managed: target !== "agents", mcp: [], rules_managed: target !== "agents", rules: false, rule_ids: [], authoritative: false }); }}>{t("sync.clearManaged")}</Button>
+            <Button variant="quiet" disabled={!selection} onClick={() => { setPlan(null); if (selection) setSelection({ ...selection, all_kinds: [], skills_managed: true, skills: [], plugins_managed: target === "cursor", plugins: [], mcp_managed: target !== "agents", mcp: [], rules_managed: target !== "agents", rules: false, rule_ids: [], authoritative: false }); }}>{t("sync.clearManaged")}</Button>
           </div>
           <SyncModePicker value={selection?.mode ?? "preserve"} disabled={busy} onChange={(mode) => { if (selection) setSelection({ ...selection, mode }); setPlan(null); }} />
+          <label className={`sync-selection__rules sync-immediate ${selection?.sync_on_change ? "is-selected" : ""}`}><input type="checkbox" checked={Boolean(selection?.sync_on_change)} disabled={!selection || busy} onChange={(event) => { if (selection) setSelection({ ...selection, sync_on_change: event.target.checked }); setPlan(null); }} /><span className="sync-selection__check"><CheckCircle2 size={15} /></span><span><strong>{t("sync.immediate")}</strong><small>{t("sync.immediateHint")}</small></span></label>
           {currentProfile?.needs_review && <p className="warning-banner" role="status">{t("sync.needsReview")}</p>}
           <p className="scope-impact-note"><ShieldCheck size={15} />{t(selection?.mode === "replace" ? "sync.replaceHint" : "sync.preserveHint")}</p>
           <div className="sync-selection__groups">
@@ -875,10 +904,12 @@ function Sync({ onApplied, onNotify }: { onApplied: () => void; onNotify: (messa
               const items = selectionItems.filter((item) => item.kind === kind);
               const key = kind === "skill" ? "skills" : kind === "plugin" ? "plugins" : kind === "rule" ? "rule_ids" : "mcp";
               const managedKey = (key === "rule_ids" ? "rules_managed" : `${key}_managed`) as "skills_managed" | "plugins_managed" | "mcp_managed" | "rules_managed";
-              const selected = selection?.[key] ?? [];
+              const all = Boolean(selection?.all_kinds?.includes(kind));
+              const fixed = selection?.[key] ?? [];
+              const selected = selection ? scopeIds(selection, kind, inventory) : [];
               const locked = kind === "plugin" && target !== "cursor";
-              const managed = !locked && Boolean(selection?.[managedKey]);
-              return <details open key={kind} className={`sync-selection__group ${managed ? "is-managed" : ""} ${locked ? "is-locked" : ""}`}><summary><span>{t(`kinds.${kind}`)}</span><small>{locked ? t("sync.cliManaged") : managed ? `${selected.length} / ${inventory.filter((item) => item.kind === kind).length}` : t("sync.notManaged")}</small></summary><div onWheel={handoffBoundaryWheel}>{locked ? <div className="sync-domain-constraint"><ShieldCheck size={16} /><span>{t(target === "claude" ? "sync.claudePluginConstraint" : "sync.codexPluginConstraint")}</span></div> : <><label className={`sync-domain-toggle ${managed ? "is-selected" : ""}`}><input type="checkbox" checked={managed} disabled={busy} onChange={() => { if (selection) setSelection({ ...selection, [managedKey]: !managed, [key]: managed ? [] : selected, authoritative: false }); setPlan(null); }} /><span className="sync-selection__check"><CheckCircle2 size={15} /></span><span><strong>{t("sync.manageDomain")}</strong><small>{managed ? t(selection?.mode === "replace" ? "sync.emptyMeansClear" : "sync.preserveHint") : t("sync.domainUntouched")}</small></span></label>{items.map((item) => <label key={item.id} className={selected.includes(item.id) ? "is-selected" : ""}><input type="checkbox" disabled={!managed} checked={selected.includes(item.id)} onChange={() => toggleCapability(item)} /><span className="sync-selection__check"><CheckCircle2 size={15} /></span><span><strong>{item.display_name}</strong><small>{item.id}</small></span></label>)}</>}</div></details>;
+              const managed = !locked && (all || Boolean(selection?.[managedKey]));
+              return <details open key={kind} className={`sync-selection__group ${managed ? "is-managed" : ""} ${locked ? "is-locked" : ""}`}><summary><span>{t(`kinds.${kind}`)}</span><small>{locked ? t("sync.cliManaged") : managed ? `${selected.length} / ${inventory.filter((item) => item.kind === kind).length}` : t("sync.notManaged")}</small></summary><div onWheel={handoffBoundaryWheel}>{locked ? <div className="sync-domain-constraint"><ShieldCheck size={16} /><span>{t(target === "claude" ? "sync.claudePluginConstraint" : "sync.codexPluginConstraint")}</span></div> : <><label className={`sync-domain-toggle ${managed ? "is-selected" : ""}`}><input type="checkbox" checked={managed} disabled={busy} onChange={() => { if (selection) setSelection({ ...selection, [managedKey]: !managed, [key]: managed ? [] : fixed, all_kinds: (selection.all_kinds ?? []).filter((value) => value !== kind), authoritative: false }); setPlan(null); }} /><span className="sync-selection__check"><CheckCircle2 size={15} /></span><span><strong>{t("sync.manageDomain")}</strong><small>{managed ? t(selection?.mode === "replace" ? "sync.emptyMeansClear" : "sync.preserveHint") : t("sync.domainUntouched")}</small></span></label><label className={`sync-domain-toggle ${all ? "is-selected" : ""}`}><input type="checkbox" aria-label={`${t("sync.allCategory")} ${t(`kinds.${kind}`)}`} checked={all} disabled={!managed || busy} onChange={() => { if (selection) setSelection({ ...selection, all_kinds: all ? (selection.all_kinds ?? []).filter((value) => value !== kind) : [...(selection.all_kinds ?? []), kind] }); setPlan(null); }} /><span className="sync-selection__check"><CheckCircle2 size={15} /></span><span><strong>{t("sync.allCategory")}</strong><small>{t("sync.allCategoryHint")}</small></span></label>{items.map((item) => <label key={item.id} className={selected.includes(item.id) ? "is-selected" : ""}><input type="checkbox" disabled={!managed || all || busy} checked={selected.includes(item.id)} onChange={() => toggleCapability(item)} /><span className="sync-selection__check"><CheckCircle2 size={15} /></span><span><strong>{item.display_name}</strong><small>{item.id}</small></span></label>)}</>}</div></details>;
             })}
 
           </div>
@@ -969,7 +1000,8 @@ function Sync({ onApplied, onNotify }: { onApplied: () => void; onNotify: (messa
       >
         <p>{t(confirm === "enable_auto" ? "sync.autoConfirmBody" : confirm === "disable_auto" ? "sync.disableAutoBody" : "sync.confirmBody")}</p>
         <div className="rollback-target"><span className="target-tab__mark">{targetMeta.find((item) => item.id === target)?.mark}</span><span><strong>{t(`targets.${target}`)}</strong><small>{selectedCount} {t("sync.selected")}</small></span></div>
-        {confirm === "enable_auto" && selection && <div className="auto-scope-review">{(["skill", "plugin", "mcp", "rule"] as Kind[]).map((kind) => { const ids = kind === "skill" ? selection.skills : kind === "plugin" ? selection.plugins : kind === "mcp" ? selection.mcp : selection.rule_ids ?? []; return <section key={kind}><strong>{t(`kinds.${kind}`)}</strong><span>{ids.length ? ids.map((id) => inventory.find((item) => item.kind === kind && item.id === id)?.display_name ?? id).join("、") : t("sync.noneSelected")}</span></section>; })}</div>}
+        {confirm === "enable_auto" && <p className="scope-impact-note">{t(selection?.sync_on_change ? "sync.immediateHint" : "sync.committedOnly")}</p>}
+        {confirm === "enable_auto" && selection && <div className="auto-scope-review">{(["skill", "plugin", "mcp", "rule"] as Kind[]).map((kind) => { const ids = scopeIds(selection, kind, inventory); return <section key={kind}><strong>{t(`kinds.${kind}`)}</strong><span>{selection.all_kinds?.includes(kind) ? `${t("sync.allCategory")} · ` : ""}{ids.length ? ids.map((id) => inventory.find((item) => item.kind === kind && item.id === id)?.display_name ?? id).join("、") : t("sync.noneSelected")}</span></section>; })}</div>}
         {confirm === "enable_auto" && selection?.mode === "replace" && <div className="auto-scope-review"><strong>{t("sync.delete")}</strong>{planCapabilityChanges.filter((item) => item.action === "delete").length ? planCapabilityChanges.filter((item) => item.action === "delete").map((item) => <section key={`${item.kind}:${item.id}`}><strong>{t(`kinds.${item.kind}`)}</strong><span>{item.id}</span></section>) : <p>{t("sync.noneSelected")}</p>}</div>}
         {confirm === "reviewed" && <code className="dialog-code">{plan?.id}</code>}
       </Dialog>
@@ -1245,6 +1277,8 @@ function Transactions({ data, onChanged, onNotify }: { data: Dashboard; onChange
       <span className={`history-timeline__point ${tx.status === "rollback_applied" ? "is-rollback" : ""}`}>{tx.status === "rollback_applied" ? <RotateCcw size={18} /> : <CheckCircle2 size={18} />}</span>
       <div className="history-timeline__copy">
         <span><strong>{t(`targets.${tx.target}`)}</strong><StatusBadge tone={tx.status === "applied" || tx.status === "rollback_applied" ? "ok" : "warning"}>{transactionStatus(tx.status)}</StatusBadge><StatusBadge>{transactionMode(tx.mode ?? "reviewed")}</StatusBadge></span>
+        <small>{tx.trigger ? t(`background.triggers.${tx.trigger}`) : t("background.unknown")}{tx.source_state && ` · ${t(`background.sources.${tx.source_state}`)}`}</small>
+        {!!tx.resource_changes?.length && <details><summary>{tx.resource_changes.length} {t("hosts.resources")}</summary><ul>{tx.resource_changes.map((change) => <li key={`${change.kind}:${change.id}:${change.action}`}>{t(`kinds.${change.kind}`)} · {change.id} · {t(`sync.${change.action}`)}</li>)}</ul></details>}
         <code>{tx.id}</code>
         <time>{new Date(tx.created_at).toLocaleString()}</time>
         {(tx.status === "applied" || tx.status === "rollback_applied") && <small><ShieldCheck size={13} /> {tx.status === "rollback_applied" ? t("transactions.verifiedRollback") : t("transactions.verifiedApply")}</small>}
@@ -1314,6 +1348,7 @@ function SettingsPage({ data, onReset }: { data: Dashboard; onReset: (path: stri
   return (
     <>
       <PageHeader title={t("nav.settings")} subtitle={t("settings.subtitle")} />
+      <BackgroundPanel />
       <section className="material commit-card"><header><span className="commit-card__icon"><RefreshCw size={20} /></span><div><h2>{t("settings.resetTitle")}</h2><p>{t("settings.resetHint")}</p></div></header><Button variant="danger" onClick={() => { setResetConfirmation(""); setResetError(""); setResetOpen(true); }}>{t("settings.resetAction")}</Button></section>
       <Dialog open={resetOpen} onClose={() => !resetBusy && setResetOpen(false)} title={t("settings.resetTitle")} actions={<><Button variant="secondary" disabled={resetBusy} onClick={() => setResetOpen(false)}>{t("common.cancel")}</Button><Button variant="danger" disabled={resetBusy || resetConfirmation !== "AGENTHUB"} onClick={() => void reset()}>{resetBusy ? <RefreshCw className="spin" size={16} /> : <Trash2 size={16} />}{t("settings.resetAction")}</Button></>}><p>{t("settings.resetBody")}</p><p>{t("settings.resetBackup")}</p><label className="field"><span>{t("settings.resetType")}</span><input value={resetConfirmation} disabled={resetBusy} onChange={(event) => setResetConfirmation(event.target.value)} /></label>{resetError && <div className="inline-error" role="alert">{resetError}</div>}</Dialog>
       <div className="settings-grid">
@@ -1532,3 +1567,5 @@ function Init({ onDone, recoveryPath }: { onDone: (count: number, restored?: boo
 function SyncModePicker({ value, disabled, onChange }: { value: "preserve" | "replace"; disabled?: boolean; onChange: (value: "preserve" | "replace") => void }) {
   return <fieldset className="sync-mode-picker"><legend>{t("sync.modeTitle")}</legend>{(["preserve", "replace"] as const).map((mode) => <label key={mode}><input type="radio" name="sync-mode" checked={value === mode} disabled={disabled} onChange={() => onChange(mode)} /><span><strong>{t(`sync.${mode}Mode`)}</strong><small>{t(`sync.${mode}Hint`)}</small></span></label>)}</fieldset>;
 }
+
+export default function App() { return <><DesktopControls /><AppContent /></>; }

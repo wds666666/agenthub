@@ -1,3 +1,4 @@
+import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type SkillChangeReport } from "./api";
 
@@ -36,6 +37,12 @@ export function useSkillChanges(enabled: boolean, page: string) {
     document.addEventListener("visibilitychange", resume);
     return () => { window.clearInterval(timer); window.removeEventListener("focus", resume); document.removeEventListener("visibilitychange", resume); };
   }, [enabled, check]);
+  useEffect(() => {
+    if (!enabled || !("__TAURI_INTERNALS__" in window)) return;
+    let disposed = false; let unlisten: (() => void) | undefined;
+    void listen<SkillChangeReport>("skill-changes", (event) => { setReport(event.payload); setError(""); }).then((fn) => { if (disposed) fn(); else unlisten=fn; }).catch(() => undefined);
+    return () => { disposed=true; unlisten?.(); };
+  }, [enabled]);
   useEffect(() => { void check(); }, [page, check]);
   return { ...report, checking, error, check };
 }

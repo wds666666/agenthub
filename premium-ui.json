@@ -7,5 +7,8 @@
   "locales": [
     "zh-CN",
     "en"
-  ]
+  ],
+  "ownership": {
+    "Select/Listbox": "native"
+  }
 }

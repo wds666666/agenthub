@@ -43,4 +43,4 @@ The existing version is retained unless a new version is explicitly requested. P
 
 GitHub and self-hosted Git/Gitea support access-token sign-in in the app; encrypted credentials stay local and are shared with CLI. Cloud packages are built from locally tested version tags only. Ordinary pushes run lightweight checks; release publication requires explicit approval and reuses successful build artifacts.
 
-The [manager Skill](../skills/agenthub-manager/SKILL.md) is optional: obtain its complete source folder and copy it manually to a tool only when needed. Installers do not create tool Skills or Rules. Synchronization defaults to preserving all unselected host content; replacement is explicit and limited to selected categories.
+Desktop maintains the bundled [manager Skill](../skills/agenthub-manager/SKILL.md) in its library. It reaches tools only through enabled sync scopes; a standalone source folder/ZIP remains available for manual use. Installers do not create tool Skills or Rules. Synchronization defaults to preserving all unselected host content; replacement is explicit and limited to selected categories.

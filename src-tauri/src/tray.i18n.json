@@ -1,0 +1,4 @@
+{
+  "zh-CN": {"open":"打开 AgentHub","refresh":"立即检查并同步","pause":"暂停／恢复自动同步","exit":"退出"},
+  "en": {"open":"Open AgentHub","refresh":"Check and sync now","pause":"Pause / resume automatic sync","exit":"Quit"}
+}

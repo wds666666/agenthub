@@ -52,6 +52,10 @@ impl SkillChangeCache {
             skills: BTreeMap::new(),
         }
     }
+    pub fn report(&self) -> SkillChangeReport {
+        self.report.clone()
+    }
+
     pub fn check(&mut self, paths: &AgentHubPaths, refresh: bool) -> Result<SkillChangeReport> {
         let roots = (paths.root.clone(), paths.user_home.clone());
         if self.roots.as_ref() != Some(&roots) {

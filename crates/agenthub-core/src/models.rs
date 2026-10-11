@@ -208,6 +208,12 @@ pub enum SyncMode {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct SyncSelection {
+    /// Explicit, device-local dynamic category scope; legacy profiles stay fixed.
+    #[serde(default)]
+    pub all_kinds: Vec<CapabilityKind>,
+    /// Imports/edits may deliver unsaved content only after explicit opt-in.
+    #[serde(default)]
+    pub sync_on_change: bool,
     #[serde(default)]
     pub mode: SyncMode,
     #[serde(default)]
@@ -233,17 +239,54 @@ pub struct SyncSelection {
 }
 
 impl SyncSelection {
+    pub fn includes_all(&self, kind: CapabilityKind) -> bool {
+        self.all_kinds.contains(&kind)
+    }
+    pub fn resolved(&self, caps: &[Capability]) -> Self {
+        let mut scope = self.clone();
+        for (kind, managed, ids) in [
+            (
+                CapabilityKind::Skill,
+                &mut scope.skills_managed,
+                &mut scope.skills,
+            ),
+            (CapabilityKind::Mcp, &mut scope.mcp_managed, &mut scope.mcp),
+            (
+                CapabilityKind::Plugin,
+                &mut scope.plugins_managed,
+                &mut scope.plugins,
+            ),
+            (
+                CapabilityKind::Rule,
+                &mut scope.rules_managed,
+                &mut scope.rule_ids,
+            ),
+        ] {
+            if self.includes_all(kind) {
+                *ids = caps
+                    .iter()
+                    .filter(|c| c.kind == kind)
+                    .map(|c| c.id.clone())
+                    .collect();
+                *managed = self.mode == SyncMode::Replace || !ids.is_empty();
+            }
+        }
+        scope.all_kinds.clear();
+        scope
+    }
     pub fn manages_skills(&self) -> bool {
-        self.skills_managed || !self.skills.is_empty()
+        self.includes_all(CapabilityKind::Skill) || self.skills_managed || !self.skills.is_empty()
     }
     pub fn manages_plugins(&self) -> bool {
-        self.plugins_managed || !self.plugins.is_empty()
+        self.includes_all(CapabilityKind::Plugin)
+            || self.plugins_managed
+            || !self.plugins.is_empty()
     }
     pub fn manages_mcp(&self) -> bool {
-        self.mcp_managed || !self.mcp.is_empty()
+        self.includes_all(CapabilityKind::Mcp) || self.mcp_managed || !self.mcp.is_empty()
     }
     pub fn manages_rules(&self) -> bool {
-        self.rules_managed || !self.rule_ids.is_empty()
+        self.includes_all(CapabilityKind::Rule) || self.rules_managed || !self.rule_ids.is_empty()
     }
 }
 impl Default for PlanCapabilitySummary {
@@ -305,6 +348,12 @@ pub enum TransactionMode {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Transaction {
+    #[serde(default)]
+    pub trigger: Option<String>,
+    #[serde(default)]
+    pub source_state: Option<String>,
+    #[serde(default)]
+    pub resource_changes: Vec<PlanResourceChange>,
     pub id: String,
     pub plan_id: String,
     pub target: Target,
@@ -402,6 +451,8 @@ pub struct PolicySettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Dashboard {
+    #[serde(default)]
+    pub auto_sync_errors: Vec<String>,
     pub initialized: bool,
     pub inventory: BTreeMap<String, usize>,
     pub enabled_targets: Vec<Target>,

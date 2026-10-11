@@ -22,7 +22,10 @@ pub struct AgentHubPaths {
 
 impl AgentHubPaths {
     pub fn discover() -> Result<Self> {
-        let user_home = dirs::home_dir().context("HOME is unavailable")?;
+        let user_home = std::env::var_os("AGENTHUB_USER_HOME")
+            .map(PathBuf::from)
+            .or_else(dirs::home_dir)
+            .context("HOME is unavailable")?;
         let root = std::env::var_os("AGENTHUB_HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| user_home.join(".agenthub"));

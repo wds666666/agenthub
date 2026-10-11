@@ -1,3 +1,4 @@
+mod desktop_background;
 use agenthub_core::{
     canonical, git, host,
     models::{
@@ -122,7 +123,9 @@ fn dashboard() -> Result<Dashboard, String> {
         .filter(|profile| profile.enabled)
         .map(|profile| profile.target)
         .collect();
+    let auto_sync_errors = read_auto_sync_errors(&h).map_err(err)?;
     Ok(Dashboard {
+        auto_sync_errors,
         initialized,
         inventory: counts,
         enabled_targets: h.store.enabled_targets().map_err(err)?,
@@ -135,6 +138,36 @@ fn dashboard() -> Result<Dashboard, String> {
         recent_transactions: h.store.recent_transactions(5).map_err(err)?,
     })
 }
+fn read_auto_sync_errors(h: &AgentHub) -> anyhow::Result<Vec<String>> {
+    let mut auto_sync_errors = Vec::new();
+    for target in Target::ALL {
+        if let Some(error) = h
+            .store
+            .meta(&format!("auto_sync_error_{}", target.as_str()))?
+        {
+            if !error.is_empty() {
+                auto_sync_errors.push(format!("{}: {}", target.as_str(), error));
+            }
+        }
+    }
+    if let Some(error) = h.store.meta("auto_sync_observer_error")? {
+        if !error.is_empty() {
+            auto_sync_errors.push(error);
+        }
+    }
+    for key in ["background_error", "manager_error"] {
+        if let Some(error) = h.store.meta(key)?.filter(|s| !s.is_empty()) {
+            auto_sync_errors.push(error);
+        }
+    }
+    Ok(auto_sync_errors)
+}
+#[tauri::command(async)]
+fn auto_sync_errors() -> Result<Vec<String>, String> {
+    let h = hub()?;
+    read_auto_sync_errors(&h).map_err(err)
+}
+
 #[tauri::command(async)]
 fn inventory() -> Result<Vec<agenthub_core::models::Capability>, String> {
     let h = hub()?;
@@ -249,11 +282,12 @@ fn check_skill_changes(refresh: bool) -> Result<SkillChangeReport, String> {
     if !h.store.initialized().map_err(err)? {
         return Ok(SkillChangeReport::default());
     }
-    SKILL_CHANGES
-        .lock()
-        .map_err(err)?
-        .check(&h.paths, refresh)
-        .map_err(err)
+    let mut cache = SKILL_CHANGES.lock().map_err(err)?;
+    if refresh {
+        cache.check(&h.paths, true).map_err(err)
+    } else {
+        Ok(cache.report())
+    }
 }
 
 #[tauri::command(async)]
@@ -264,6 +298,7 @@ fn initial_scan() -> Result<Vec<ScanItem>, String> {
     {
         return Err("incomplete Canonical import exists; discard it before retrying".into());
     }
+    desktop_background::maintain_manager(&h);
     let items = scanner::scan_global(&h.paths, &Target::ALL).map_err(err)?;
     trace(
         "init",
@@ -376,6 +411,7 @@ fn finish_init(selected_ids: Vec<String>) -> Result<Vec<String>, String> {
         .map_err(|error| import_error("init", error))?;
     git::ensure_repo(&h.paths.root).map_err(err)?;
     h.store.set_initialized(true).map_err(err)?;
+    desktop_background::maintain_manager(&h);
     trace(
         "init",
         "import_complete",
@@ -395,8 +431,17 @@ fn restore_library(
     let DesktopHub { inner, _guard } = h;
     let paths = inner.paths.clone();
     drop(inner);
-    agenthub_core::bootstrap::restore(&paths, &url, &branch, username.as_deref(), token.as_deref())
-        .map_err(|error| import_error("restore", error))
+    let result = agenthub_core::bootstrap::restore(
+        &paths,
+        &url,
+        &branch,
+        username.as_deref(),
+        token.as_deref(),
+    )
+    .map_err(|error| import_error("restore", error))?;
+    let restored = AgentHub::open(paths).map_err(err)?;
+    desktop_background::maintain_manager(&restored);
+    Ok(result)
 }
 #[tauri::command(async)]
 fn discard_incomplete_init() -> Result<(), String> {
@@ -543,8 +588,18 @@ fn set_auto_sync(
         }
         let changed = !plan.steps.is_empty();
         let transaction = if changed {
-            Some(transaction::apply(&h.paths, &h.store, &plan).map_err(err)?)
+            Some(
+                transaction::with_trigger("initial_enable", || {
+                    transaction::apply(&h.paths, &h.store, &plan)
+                })
+                .map_err(err)?,
+            )
         } else {
+            // Reviewed equality still establishes ownership for future MCP updates.
+            transaction::with_trigger("initial_enable", || {
+                transaction::sync_once(&h.paths, &h.store, target, Some(&profile.selection))
+            })
+            .map_err(err)?;
             None
         };
         agenthub_core::models::SyncRunResult {
@@ -553,9 +608,15 @@ fn set_auto_sync(
             transaction,
         }
     } else {
-        transaction::sync_once(&h.paths, &h.store, target, Some(&profile.selection)).map_err(err)?
+        transaction::with_trigger("initial_enable", || {
+            transaction::sync_once(&h.paths, &h.store, target, Some(&profile.selection))
+        })
+        .map_err(err)?
     };
     h.store.set_auto_sync_profile(&profile).map_err(err)?;
+    h.store
+        .set_meta(&format!("auto_sync_error_{}", target.as_str()), "")
+        .map_err(err)?;
     trace(
         "auto_sync",
         "enabled",
@@ -758,6 +819,14 @@ fn sync_remote() -> Result<agenthub_core::models::RemoteSyncResult, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.show();
+                let _ = w.unminimize();
+                let _ = w.set_focus();
+            }
+        }))
+        .on_window_event(desktop_background::window_event)
         .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_log::Builder::new()
@@ -772,13 +841,14 @@ pub fn run() {
                 .level(log::LevelFilter::Info)
                 .build(),
         )
-        .setup(|_| {
+        .setup(|app| {
             std::panic::set_hook(Box::new(|panic_info| {
                 log::error!(
                     "desktop panic: {}",
                     agenthub_core::secrets::redact(&panic_info.to_string())
                 );
             }));
+            desktop_background::setup(app.handle())?;
             log::info!(
                 "AgentHub desktop started version={}",
                 env!("CARGO_PKG_VERSION")
@@ -786,6 +856,11 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            desktop_background::background_settings,
+            desktop_background::set_background_settings,
+            desktop_background::background_status,
+            desktop_background::background_refresh,
+            desktop_background::close_choice,
             dashboard,
             runtime_diagnostics,
             debug_event,
@@ -810,6 +885,7 @@ pub fn run() {
             create_plan,
             apply_plan,
             auto_sync_profiles,
+            auto_sync_errors,
             policy_settings,
             set_policy_settings,
             set_auto_sync,

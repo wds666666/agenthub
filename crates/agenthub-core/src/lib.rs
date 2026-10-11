@@ -1,12 +1,15 @@
 pub mod adapters;
+pub mod background;
 mod backup;
 pub mod bootstrap;
 pub mod canonical;
+pub mod change_sync;
 pub mod comparison;
 pub mod git;
 pub mod git_auth;
 pub mod host;
 pub mod imports;
+pub mod manager;
 pub mod models;
 pub mod paths;
 pub mod planner;

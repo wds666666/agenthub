@@ -17,6 +17,19 @@ use std::{
 use uuid::Uuid;
 use walkdir::WalkDir;
 
+thread_local! { static TRIGGER: std::cell::Cell<&'static str> = const { std::cell::Cell::new("manual") }; }
+pub fn with_trigger<T>(trigger: &'static str, action: impl FnOnce() -> T) -> T {
+    struct Reset(&'static str);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            TRIGGER.with(|v| v.set(self.0));
+        }
+    }
+    let previous = TRIGGER.with(|v| v.replace(trigger));
+    let _reset = Reset(previous);
+    action()
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct BackupEntry {
     target_path: PathBuf,
@@ -89,9 +102,9 @@ pub fn save_rule(
     rule: &crate::models::RuleDocument,
     create: bool,
 ) -> Result<crate::models::CapabilityMutationResult> {
+    let _lock = crate::versions::lock(paths)?;
     let capability = crate::canonical::save_rule(paths, rule, create)?;
-    let _ = store;
-    let auto_sync = Vec::new();
+    let auto_sync = with_trigger("library_edit", || run_auto_sync_on_change(paths, store))?;
     Ok(crate::models::CapabilityMutationResult {
         capability,
         auto_sync,
@@ -105,24 +118,76 @@ pub(crate) fn run_auto_sync_snapshot(
     paths: &AgentHubPaths,
     store: &Store,
 ) -> Result<Vec<AutoSyncOutcome>> {
+    with_trigger("saved_version", || run_auto_profiles(paths, store, false))
+}
+/// Explicit user request to project current local content, including pending edits.
+pub fn run_auto_sync_pending(paths: &AgentHubPaths, store: &Store) -> Result<Vec<AutoSyncOutcome>> {
+    with_trigger("manual", || run_auto_profiles(paths, store, false))
+}
+/// Mutation hook: only reviewed profiles that explicitly opted into pending delivery.
+pub fn run_auto_sync_on_change(
+    paths: &AgentHubPaths,
+    store: &Store,
+) -> Result<Vec<AutoSyncOutcome>> {
+    let settings = crate::background::settings(store)?;
+    if settings.paused || settings.sync_seconds > 0 {
+        crate::background::queue(store)?;
+        return Ok(vec![]);
+    }
+    deliver_changes(paths, store)
+}
+pub(crate) fn deliver_changes(
+    paths: &AgentHubPaths,
+    store: &Store,
+) -> Result<Vec<AutoSyncOutcome>> {
+    match run_auto_profiles(paths, store, true) {
+        Ok(outcomes) => {
+            crate::background::record(store, &outcomes)?;
+            Ok(outcomes)
+        }
+        Err(error) => {
+            // Canonical mutation already succeeded: report delivery separately.
+            let error = crate::secrets::redact(&format!("{error:#}"));
+            let outcomes = store
+                .auto_sync_profiles()?
+                .into_iter()
+                .filter(|p| p.enabled && !p.needs_review && p.selection.sync_on_change)
+                .map(|p| AutoSyncOutcome {
+                    target: p.target,
+                    changed: false,
+                    transaction_id: None,
+                    error: Some(error.clone()),
+                    plan: None,
+                })
+                .collect();
+            Ok(outcomes)
+        }
+    }
+}
+fn run_auto_profiles(
+    paths: &AgentHubPaths,
+    store: &Store,
+    on_change: bool,
+) -> Result<Vec<AutoSyncOutcome>> {
     let profiles = store.auto_sync_profiles()?;
-    if !profiles.iter().any(|p| p.enabled && !p.needs_review) {
+    if !profiles
+        .iter()
+        .any(|p| p.enabled && !p.needs_review && (!on_change || p.selection.sync_on_change))
+    {
         return Ok(Vec::new());
     }
-    let ids: std::collections::BTreeSet<_> = crate::canonical::inventory(paths)?
-        .into_iter()
-        .map(|c| (c.kind, c.id))
-        .collect();
+    let caps = crate::canonical::inventory(paths)?;
+    let ids: std::collections::BTreeSet<_> = caps.iter().map(|c| (c.kind, c.id.clone())).collect();
 
-    Ok(profiles
+    let outcomes: Vec<AutoSyncOutcome> = profiles
         .into_iter()
-        .filter(|profile| profile.enabled && !profile.needs_review)
+        .filter(|profile| profile.enabled && !profile.needs_review && (!on_change || profile.selection.sync_on_change))
         .map(|profile| {
             if profile.selection.mode==crate::models::SyncMode::Replace {
-                let missing=[(crate::models::CapabilityKind::Skill,&profile.selection.skills),(crate::models::CapabilityKind::Mcp,&profile.selection.mcp),(crate::models::CapabilityKind::Plugin,&profile.selection.plugins),(crate::models::CapabilityKind::Rule,&profile.selection.rule_ids)].iter().any(|(kind,selected)|selected.iter().any(|id|!ids.contains(&(*kind,id.clone()))));
-                if missing {return AutoSyncOutcome{target:profile.target,changed:false,transaction_id:None,error:Some("replacement scope contains capabilities absent from saved HEAD; save or review scope first".into()),plan:None};}
+                let missing=[(crate::models::CapabilityKind::Skill,&profile.selection.skills),(crate::models::CapabilityKind::Mcp,&profile.selection.mcp),(crate::models::CapabilityKind::Plugin,&profile.selection.plugins),(crate::models::CapabilityKind::Rule,&profile.selection.rule_ids)].iter().any(|(kind,selected)|!profile.selection.includes_all(*kind) && selected.iter().any(|id|!ids.contains(&(*kind,id.clone()))));
+                if missing {return AutoSyncOutcome{target:profile.target,changed:false,transaction_id:None,error:Some("replacement scope contains capabilities absent from the source snapshot; review scope first".into()),plan:None};}
             }
-            let mut selection = profile.selection;
+            let mut selection = profile.selection.resolved(&caps);
             selection.skills_managed = selection.manages_skills();
             selection.mcp_managed = selection.manages_mcp();
             selection.plugins_managed = selection.manages_plugins();
@@ -159,7 +224,12 @@ pub(crate) fn run_auto_sync_snapshot(
                 },
             }
         })
-        .collect())
+        .collect();
+    for outcome in &outcomes {
+        let key = format!("auto_sync_error_{}", outcome.target.as_str());
+        store.set_meta(&key, outcome.error.as_deref().unwrap_or(""))?;
+    }
+    Ok(outcomes)
 }
 
 pub(crate) fn check_auto_drift(_paths: &AgentHubPaths, store: &Store, plan: &Plan) -> Result<()> {
@@ -268,6 +338,16 @@ pub fn apply_with_mode(
         target: plan.target,
         status: "applying".into(),
         mode,
+        trigger: Some(TRIGGER.with(|v| v.get()).into()),
+        source_state: Some(
+            if TRIGGER.with(|v| v.get()) == "saved_version" {
+                "committed"
+            } else {
+                "working_tree"
+            }
+            .into(),
+        ),
+        resource_changes: plan.resource_changes.clone(),
         backup_path: backup_path.clone(),
         git: plan.git.clone(),
         canonical_digest: plan.canonical_digest.clone(),
@@ -495,6 +575,9 @@ pub fn rollback(paths: &AgentHubPaths, store: &Store, transaction_id: &str) -> R
         target: source.target,
         status: "rolling_back".into(),
         mode: TransactionMode::Rollback,
+        trigger: Some("rollback".into()),
+        source_state: Some("backup".into()),
+        resource_changes: vec![],
         backup_path: backup_path.clone(),
         git: crate::git::snapshot(&paths.root)?,
         canonical_digest: canonical_digest(paths).unwrap_or_else(|_| "unavailable".into()),

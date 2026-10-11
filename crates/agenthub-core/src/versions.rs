@@ -52,6 +52,11 @@ fn runtime(paths: &AgentHubPaths) -> Result<()> {
     fs::create_dir_all(root)?;
     Ok(())
 }
+/// Shared transaction serialization for explicit desktop requests.
+pub fn operation_lock(paths: &AgentHubPaths) -> Result<fs::File> {
+    lock(paths)
+}
+
 pub(crate) fn lock(paths: &AgentHubPaths) -> Result<fs::File> {
     runtime(paths)?;
     let path = paths.root.join("runtime/versions.lock");
